@@ -1,0 +1,100 @@
+# OpenBy Xcode 工程定义（XcodeGen 生成 OpenBy.xcodeproj）。
+# 与 Package.swift 保持同构：OpenBy 静态框架 + 三个可执行 target。
+# 语言模式 v5 对应 Package.swift 中的 .swiftLanguageMode(.v5)。
+# 重新生成: xcodegen generate
+
+name: OpenBy
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    CODE_SIGN_STYLE: Manual
+
+targets:
+  # 静态框架：全部业务逻辑（Core/System/Storage/UI），供 app / 测试运行器 / 基准 import。
+  # 用 MACH_O_TYPE=staticlib 保持与 SPM 一致的静态链接，避免 .app 内嵌框架的签名问题。
+  OpenBy:
+    type: framework
+    platform: macOS
+    sources:
+      - path: Sources/OpenBy
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.OpenByCore
+        MACH_O_TYPE: staticlib
+        CODE_SIGNING_ALLOWED: "NO"
+
+  # 应用 .app：包内可执行文件名保持 OpenBy（与 Resources/Info.plist 的 CFBundleExecutable 一致）。
+  OpenByApp:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/OpenByApp
+    dependencies:
+      - target: OpenBy
+        # 静态框架只链接、不复制进 .app（复制会触发 "codeless framework" stub 注入导致签名失败）。
+        embed: false
+    info:
+      path: Resources/Info.plist
+    settings:
+      base:
+        PRODUCT_NAME: OpenBy
+        # PRODUCT_MODULE_NAME 默认跟随 PRODUCT_NAME；不显式覆盖会让本 target 的
+        # Swift 模块也叫 OpenBy，与 OpenBy 框架撞名，导致 `import OpenBy` 被忽略。
+        PRODUCT_MODULE_NAME: OpenByApp
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.OpenBy
+        # 无开发团队：ad-hoc 签名即可本地运行（与 scripts/build-app.sh 的 codesign -s - 一致）。
+        CODE_SIGN_IDENTITY: "-"
+
+  # 无 XCTest 环境下的 CLI 测试运行器（swift run OpenByTestRunner 的 Xcode 版）。
+  OpenByTestRunner:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Sources/OpenByTestRunner
+    dependencies:
+      - target: OpenBy
+        embed: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.OpenByTestRunner
+        CODE_SIGNING_ALLOWED: "NO"
+
+  # 路由基准（swift run OpenByBenchmark --rules 10000 的 Xcode 版）。
+  OpenByBenchmark:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Benchmarks/OpenByBenchmark
+    dependencies:
+      - target: OpenBy
+        embed: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.OpenByBenchmark
+        CODE_SIGNING_ALLOWED: "NO"
+
+schemes:
+  OpenByApp:
+    build:
+      targets:
+        OpenByApp: all
+    run:
+      config: Debug
+  OpenByTestRunner:
+    build:
+      targets:
+        OpenByTestRunner: all
+    run:
+      config: Debug
+  OpenByBenchmark:
+    build:
+      targets:
+        OpenByBenchmark: all
+    run:
+      config: Debug

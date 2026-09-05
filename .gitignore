@@ -1,0 +1,15 @@
+# Swift Package Manager 构建产物
+.build/
+
+# xcodebuild -derivedDataPath .build-xcode 的本地构建产物
+.build-xcode/
+
+# .app 组装产物与发布包
+dist/
+*.dmg
+
+# 配置备份
+*.bak
+
+# 系统文件
+.DS_Store
