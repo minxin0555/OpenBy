@@ -5,9 +5,11 @@ import UniformTypeIdentifiers
 private final class FakeAppLocator: AppLocating {
     var urls: [String: URL] = [:]
     var candidates: [URL] = []
+    var lookups = 0
 
     func urlForApplication(withBundleIdentifier bundleIdentifier: String) -> URL? {
-        urls[bundleIdentifier]
+        lookups += 1
+        return urls[bundleIdentifier]
     }
 
     func urlsForApplications(toOpen contentType: UTType) -> [URL] {
@@ -24,7 +26,7 @@ enum ApplicationResolverTests {
     )
 
     fileprivate static func resolver(_ locator: FakeAppLocator, own: String? = ownBundleID, fileExists: @escaping (String) -> Bool = { _ in false }) -> ApplicationResolver {
-        ApplicationResolver(locator: locator, ownBundleIdentifier: own, fileExists: fileExists)
+        ApplicationResolver(locator: locator, ownBundleIdentifier: own, fileExists: fileExists, bundleIdentifier: { _ in pdfExpert.bundleIdentifier })
     }
 
     static let cases: [MiniTest.Case] = [
@@ -62,6 +64,31 @@ enum ApplicationResolverTests {
             try expectNil(r.applicationURL(for: selfRef))
         }),
 
+        MiniTest.Case("应用定位缓存命中、过期和显式失效", {
+            let locator = FakeAppLocator()
+            let first = URL(fileURLWithPath: "/Applications/First.app")
+            let moved = URL(fileURLWithPath: "/Applications/Moved.app")
+            locator.urls[pdfExpert.bundleIdentifier] = first
+            var time: TimeInterval = 0
+            let r = ApplicationResolver(locator: locator, ownBundleIdentifier: nil, cacheLifetime: 10, now: { time })
+            try expectEqual(r.applicationURL(for: pdfExpert), first)
+            locator.urls[pdfExpert.bundleIdentifier] = moved
+            try expectEqual(r.applicationURL(for: pdfExpert), first)
+            try expectEqual(locator.lookups, 1)
+            time = 11
+            try expectEqual(r.applicationURL(for: pdfExpert), moved)
+            try expectEqual(locator.lookups, 2)
+            r.invalidate(bundleIdentifier: pdfExpert.bundleIdentifier)
+            locator.urls.removeAll()
+            try expectNil(r.applicationURL(for: pdfExpert))
+            locator.urls[pdfExpert.bundleIdentifier] = first
+            try expectEqual(r.applicationURL(for: pdfExpert), first, "缺失结果不永久缓存")
+        }),
+        MiniTest.Case("lastKnownPath 被其他应用占用时拒绝", {
+            let r = ApplicationResolver(locator: FakeAppLocator(), ownBundleIdentifier: ownBundleID,
+                                        fileExists: { _ in true }, bundleIdentifier: { _ in "com.other.App" })
+            try expectNil(r.applicationURL(for: pdfExpert))
+        }),
         MiniTest.Case("installedApplications 过滤自身", {
             let locator = FakeAppLocator()
             locator.candidates = [

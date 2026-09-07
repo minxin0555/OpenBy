@@ -11,7 +11,7 @@ let package = Package(
             name: "OpenBy",
             swiftSettings: [
                 // AppKit 在本 SDK 中大量标注 @MainActor。v5 宽松并发 + 在
-                // Coordinator/UI 上显式标注 @MainActor，形成"主线程=整个 app"的模型。
+                // UI 上显式标注 @MainActor；路由状态交由独立串行队列管理。
                 .swiftLanguageMode(.v5)
             ]
         ),

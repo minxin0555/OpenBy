@@ -9,11 +9,13 @@ final class DiagnosticsViewController: NSViewController, NSTableViewDataSource, 
 
     private let infoLabel = NSTextField(labelWithString: "")
     private let exportButton = NSButton(title: "导出配置…", target: nil, action: nil)
-    private let refreshButton = NSButton(title: "重新自检", target: nil, action: nil)
+    private let refreshButton = NSButton(title: "重新检查", target: nil, action: nil)
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
-    private let errorsTitle = NSTextField(labelWithString: "最近错误（仅内存，不落盘）")
-    private let errorsLabel = NSTextField(labelWithString: "暂无")
+    private let performanceLabel = NSTextField(wrappingLabelWithString: "暂无打开记录")
+    private var checkGeneration = 0
+    private let errorsTitle = NSTextField(labelWithString: "需要留意的问题")
+    private let errorsLabel = NSTextField(labelWithString: "没有发现问题")
 
     /// 自检结果行。
     private struct Row {
@@ -46,69 +48,74 @@ final class DiagnosticsViewController: NSViewController, NSTableViewDataSource, 
 
     private func buildUI() {
         infoLabel.font = .systemFont(ofSize: 12)
-        infoLabel.lineBreakMode = .byTruncatingTail
-        errorsTitle.font = .systemFont(ofSize: 12, weight: .medium)
+        infoLabel.lineBreakMode = .byTruncatingMiddle
+        infoLabel.maximumNumberOfLines = 0
+        infoLabel.isSelectable = true
+        performanceLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        performanceLabel.maximumNumberOfLines = 0
+        performanceLabel.isSelectable = true
+        performanceLabel.setContentCompressionResistancePriority(.required, for: .vertical)
+        errorsTitle.stringValue = "最近问题"
+        errorsTitle.font = .systemFont(ofSize: 14, weight: .semibold)
         errorsLabel.textColor = .secondaryLabelColor
-        errorsLabel.font = .systemFont(ofSize: 11)
-        errorsLabel.lineBreakMode = .byTruncatingMiddle
-        errorsLabel.maximumNumberOfLines = 6
-
+        errorsLabel.font = .systemFont(ofSize: 12)
+        errorsLabel.lineBreakMode = .byWordWrapping
+        errorsLabel.maximumNumberOfLines = 0
+        errorsLabel.isSelectable = true
+        errorsLabel.setContentCompressionResistancePriority(.required, for: .vertical)
+        SettingsStyle.button(exportButton, symbol: "square.and.arrow.up")
         exportButton.target = self
         exportButton.action = #selector(exportConfig(_:))
+        SettingsStyle.button(refreshButton, symbol: "arrow.clockwise")
         refreshButton.target = self
         refreshButton.action = #selector(reload(_:))
 
-        let columns: [(id: String, title: String, width: CGFloat)] = [
-            ("handler", "文件类型", 120),
-            ("taken", "默认=OpenBy", 100),
-            ("apps", "目标应用存在", 110),
-            ("folders", "规则文件夹存在", 110),
-        ]
-        for col in columns {
-            let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(col.id))
-            column.title = col.title
-            column.width = col.width
+        for (id, title, width) in [("handler", "文件类型", 140.0), ("taken", "自动打开", 120.0), ("apps", "应用", 130.0), ("folders", "文件夹", 130.0)] {
+            let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
+            column.title = title
+            column.width = width
             tableView.addTableColumn(column)
         }
         tableView.dataSource = self
         tableView.delegate = self
-        tableView.usesAlternatingRowBackgroundColors = true
+        tableView.style = .inset
+        tableView.rowHeight = 36
+        tableView.usesAlternatingRowBackgroundColors = false
         tableView.allowsEmptySelection = true
         tableView.selectionHighlightStyle = .none
-
         scrollView.documentView = tableView
         scrollView.hasVerticalScroller = true
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.heightAnchor.constraint(equalToConstant: 180).isActive = true
 
-        let buttons = NSStackView(views: [exportButton, refreshButton])
-        buttons.orientation = .horizontal
-        buttons.spacing = 8
-
-        for subview in [infoLabel, buttons, scrollView, errorsTitle, errorsLabel] {
-            subview.translatesAutoresizingMaskIntoConstraints = false
-            view.addSubview(subview)
-        }
-
+        let header = SettingsStyle.row([SettingsStyle.label("帮助与诊断", size: 22, weight: .semibold), SettingsStyle.spacer(), exportButton, refreshButton])
+        let content = SettingsStyle.column([
+            header,
+            SettingsStyle.column([SettingsStyle.label("应用信息", size: 14, weight: .semibold), SettingsStyle.group(infoLabel)], spacing: 10),
+            SettingsStyle.column([SettingsStyle.label("状态检查", size: 14, weight: .semibold), SettingsStyle.group(scrollView, inset: 0)], spacing: 10),
+            SettingsStyle.column([SettingsStyle.label("打开性能", size: 14, weight: .semibold), SettingsStyle.group(performanceLabel)], spacing: 10),
+            SettingsStyle.column([errorsTitle, SettingsStyle.group(errorsLabel)], spacing: 10),
+        ], spacing: 24)
+        let page = SettingsFlippedView()
+        let pageScroll = NSScrollView()
+        pageScroll.documentView = page
+        pageScroll.hasVerticalScroller = true
+        pageScroll.autohidesScrollers = true
+        pageScroll.drawsBackground = false
+        for child in [pageScroll, page, content] { child.translatesAutoresizingMaskIntoConstraints = false }
+        view.addSubview(pageScroll)
+        page.addSubview(content)
         NSLayoutConstraint.activate([
-            infoLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
-            infoLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
-            infoLabel.trailingAnchor.constraint(lessThanOrEqualTo: buttons.leadingAnchor, constant: -12),
-
-            buttons.topAnchor.constraint(equalTo: view.topAnchor, constant: 8),
-            buttons.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
-
-            scrollView.topAnchor.constraint(equalTo: infoLabel.bottomAnchor, constant: 10),
-            scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
-            scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
-            scrollView.heightAnchor.constraint(equalToConstant: 200),
-
-            errorsTitle.topAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: 12),
-            errorsTitle.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
-
-            errorsLabel.topAnchor.constraint(equalTo: errorsTitle.bottomAnchor, constant: 4),
-            errorsLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
-            errorsLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
-            errorsLabel.bottomAnchor.constraint(lessThanOrEqualTo: view.bottomAnchor, constant: -12),
+            pageScroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            pageScroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            pageScroll.topAnchor.constraint(equalTo: view.topAnchor),
+            pageScroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            page.widthAnchor.constraint(equalTo: pageScroll.contentView.widthAnchor),
+            content.leadingAnchor.constraint(equalTo: page.leadingAnchor, constant: 28),
+            content.trailingAnchor.constraint(equalTo: page.trailingAnchor, constant: -28),
+            content.topAnchor.constraint(equalTo: page.topAnchor, constant: 28),
+            content.bottomAnchor.constraint(equalTo: page.bottomAnchor, constant: -28),
         ])
     }
 
@@ -124,27 +131,56 @@ final class DiagnosticsViewController: NSViewController, NSTableViewDataSource, 
         infoLabel.stringValue = "OpenBy v\(version)　macOS \(ProcessInfo.processInfo.operatingSystemVersionString)"
         infoLabel.stringValue += "\n配置：\(redactHome(model.store.fileURL.path))"
 
-        rows = model.configuration.handlers.map { handler in
-            let type = UTType(handler.contentTypeIdentifier)
-            let takenOver = type.map { model.isManaged(handler: handler, contentType: $0) } ?? false
-            var allAppsOK = true
-            if model.resolver.applicationURL(for: handler.fallbackApplication) == nil { allAppsOK = false }
-            for rule in handler.rules {
-                if model.resolver.applicationURL(for: rule.targetApplication) == nil { allAppsOK = false }
+        let build = infoDict?["CFBundleVersion"] as? String ?? "dev"
+        infoLabel.stringValue += "\n构建：\(build) · PID \(ProcessInfo.processInfo.processIdentifier) · 后台常驻"
+        infoLabel.stringValue += "\n应用：\(redactHome(Bundle.main.bundleURL.path))"
+        if let date = infoDict?["OpenByBuildDate"] as? String { infoLabel.stringValue += " · " + date }
+        infoLabel.toolTip = infoLabel.stringValue
+        checkGeneration += 1
+        let generation = checkGeneration
+        let handlers = model.configuration.handlers
+        let resolver = model.resolver
+        let ownID = model.openByBundleID ?? ""
+        resolver.invalidate()
+        refreshButton.isEnabled = false
+        DispatchQueue.global(qos: .utility).async {
+            let service = AssociationService(provider: WorkspaceDefaultAppProvider())
+            let rows = handlers.map { handler in
+                let type = UTType(handler.contentTypeIdentifier)
+                let takenOver = type.map { service.isManagedByOpenBy(contentType: $0, openByBundleID: ownID) } ?? false
+                let appsOK = ([handler.fallbackApplication] + handler.rules.map(\.targetApplication)).allSatisfy {
+                    resolver.applicationURL(for: $0) != nil
+                }
+                let foldersOK = handler.rules.allSatisfy { FileManager.default.fileExists(atPath: $0.folderPath) }
+                let name = handler.displayExtensions.map { "." + $0 }.joined(separator: ", ")
+                return Row(handlerName: name, takenOver: takenOver, appsOK: appsOK, foldersOK: foldersOK)
             }
-            let foldersOK = handler.rules.allSatisfy { FileManager.default.fileExists(atPath: $0.folderPath) }
-            let name = handler.displayExtensions.map { "." + $0 }.joined(separator: ", ")
-            return Row(handlerName: name, takenOver: takenOver, appsOK: allAppsOK, foldersOK: foldersOK)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.checkGeneration == generation else { return }
+                self.rows = rows
+                self.tableView.reloadData()
+                self.refreshButton.isEnabled = true
+            }
         }
-        tableView.reloadData()
-
-        let errors = recentErrorsProvider()
-        if errors.isEmpty {
-            errorsLabel.stringValue = "暂无"
-            errorsLabel.textColor = .secondaryLabelColor
-        } else {
-            errorsLabel.stringValue = errors.suffix(6).joined(separator: "\n")
-            errorsLabel.textColor = .systemOrange
+        model.diagnosticsProvider { [weak self] errors, measurements in
+            guard let self, self.checkGeneration == generation else { return }
+            self.errorsLabel.stringValue = errors.isEmpty ? "没有发现问题" : errors.joined(separator: "\n\n")
+            self.errorsLabel.textColor = errors.isEmpty ? .secondaryLabelColor : .systemOrange
+            var lines = [String(format: "本次进程入口 → 服务就绪：%.2f ms", self.model.startupMilliseconds)]
+            let values = measurements.compactMap(\.dispatchMilliseconds).sorted()
+            if !values.isEmpty {
+                let p95 = values[min(values.count - 1, Int(ceil(Double(values.count) * 0.95)) - 1)]
+                lines.append(String(format: "最近 %d 组收到事件 → 发出请求：P95 %.2f ms", values.count, p95))
+            }
+            lines.append("路由 / 排队 / 定位 / 发出请求（ms）；系统确认不等于窗口显示")
+            for sample in measurements.suffix(5) {
+                let sent = sample.dispatchMilliseconds.map { String(format: "%.2f", $0) } ?? "—"
+                lines.append(String(format: "%@ ×%d  %.2f / %.2f / %.2f / %@  %@",
+                                    sample.target, sample.fileCount, sample.routingMilliseconds,
+                                    sample.queueMilliseconds, sample.resolutionMilliseconds, sent, sample.status))
+            }
+            if measurements.isEmpty { lines.append("暂无记录；打开文件后点击重新检查。") }
+            self.performanceLabel.stringValue = lines.joined(separator: "\n")
         }
     }
 
@@ -182,9 +218,9 @@ final class DiagnosticsViewController: NSViewController, NSTableViewDataSource, 
             ?? makeCell(identifier: identifier)
         switch identifier.rawValue {
         case "handler": cell.stringValue = entry.handlerName
-        case "taken": cell.stringValue = entry.takenOver ? "✓" : "—"
-        case "apps": cell.stringValue = entry.appsOK ? "✓" : "✗ 缺失"
-        case "folders": cell.stringValue = entry.foldersOK ? "✓" : "✗ 不存在"
+        case "taken": cell.stringValue = entry.takenOver ? "已启用" : "尚未启用"
+        case "apps": cell.stringValue = entry.appsOK ? "可用" : "⚠ 缺失"
+        case "folders": cell.stringValue = entry.foldersOK ? "可用" : "⚠ 不存在"
         default: cell.stringValue = ""
         }
         return cell

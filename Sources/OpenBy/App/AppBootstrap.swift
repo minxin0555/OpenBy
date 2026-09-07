@@ -1,12 +1,14 @@
 import AppKit
 
 /// 库的公开启动入口。`Sources/OpenByApp/main.swift` 只调用这一个函数。
+@MainActor
 public func openByMain() {
+    let startedAt = ProcessInfo.processInfo.systemUptime
     let app = NSApplication.shared
-    let delegate = AppDelegate()
+    let delegate = AppDelegate(startedAt: startedAt)
     app.delegate = delegate
-    // 路由启动全程 .accessory，避免 Dock 图标常驻和前台闪窗；
-    // 打开设置窗口时由 AppDelegate 临时提升为 .regular。
+    // 单进程后台常驻，菜单栏和设置窗口共用同一服务，不占 Dock。
     app.setActivationPolicy(.accessory)
-    app.run()
+    // NSApplication 的 delegate 引用不负责所有权，确保整个常驻周期都保留委托。
+    withExtendedLifetime(delegate) { app.run() }
 }

@@ -10,6 +10,8 @@ final class SettingsModel {
     let associationService: AssociationService
     let openByBundleID: String?
     var onConfigurationChanged: (() -> Void)?
+    var startupMilliseconds: Double = 0
+    var diagnosticsProvider: (@escaping ([String], [RoutingMeasurement]) -> Void) -> Void = { $0([], []) }
 
     private(set) var configuration: Configuration
 

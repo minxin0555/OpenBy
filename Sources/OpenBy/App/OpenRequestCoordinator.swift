@@ -1,180 +1,255 @@
 import AppKit
 import Foundation
 
-/// 打开请求协调器：冷/热启动缓冲、批量合并与去重、按目标分组转发、目标缺失降级、
-/// 保活-退出决策。全部状态主线程访问。
-///
-/// 生命周期（对应文档第 15 节第 2 项）：收到新事件重置保活计时器（默认 3s）；
-/// 空闲后 flush → 转发 → 若设置窗口不可见则自动退出。
-@MainActor
-public final class OpenRequestCoordinator {
-    public let keepAliveInterval: TimeInterval
-    /// 空闲时是否允许退出（AppDelegate 注入：设置窗口可见则返回 false）。
-    public var shouldTerminateIfIdle: () -> Bool = { true }
+/// 有界、仅内存的请求计时。系统回调完成不代表文档窗口已经显示。
+public struct RoutingMeasurement {
+    public let id: UUID
+    public let target: String
+    public let fileCount: Int
+    public let routingMilliseconds: Double
+    public let queueMilliseconds: Double
+    public let resolutionMilliseconds: Double
+    public let dispatchMilliseconds: Double?
+    public var completionMilliseconds: Double?
+    public var status: String
+}
 
+/// 后台串行队列管理状态；每个目标独立定位和转发，不等待其他应用的回调。
+/// 不负责退出进程：OpenBy 在空闲和关闭设置窗口后继续常驻。
+public final class OpenRequestCoordinator {
+    private let queue = DispatchQueue(label: "OpenBy.routing", qos: .userInitiated)
     private var engine: RuleEngine
     private let resolver: ApplicationResolver
     private let opening: WorkspaceOpening
     private let openByBundleID: String?
-
-    private var pending: [URL] = []
+    private let requestTimeout: TimeInterval
     private var seenPaths = Set<String>()
-    private var workItem: DispatchWorkItem?
-    private var isFlushing = false
-    private var deferred: [URL] = []
+    private var lanes: [String: Lane] = [:]
+    private var errors: [String] = []
+    private var measurements: [RoutingMeasurement] = []
 
-    /// 仅内存保留的最近错误（诊断页展示），路径做用户目录缩写，不落盘。
-    public private(set) var recentErrors: [String] = []
-    private let maxErrors = 20
+    private struct Item {
+        let url: URL
+        let target: ApplicationReference
+        let fallback: ApplicationReference?
+        let receivedAt: TimeInterval
+        let routingMilliseconds: Double
+    }
+    private struct Job {
+        let id: UUID
+        let items: [Item]
+        let startedAt: TimeInterval
+        let timeout: DispatchWorkItem
+    }
+    private struct Lane {
+        var active: Job?
+        var pending: [Item] = []
+    }
 
     public init(
         engine: RuleEngine,
         resolver: ApplicationResolver,
         opening: WorkspaceOpening,
         openByBundleID: String?,
-        keepAliveInterval: TimeInterval = 3.0
+        requestTimeout: TimeInterval = 30
     ) {
         self.engine = engine
         self.resolver = resolver
         self.opening = opening
         self.openByBundleID = openByBundleID
-        self.keepAliveInterval = keepAliveInterval
+        self.requestTimeout = max(0.01, requestTimeout)
     }
 
-    /// 是否仍有在途请求（AppDelegate 用它决定窗口关闭时是否可退出）。
-    public var isBusy: Bool {
-        isFlushing || !pending.isEmpty || !deferred.isEmpty
+    public var isBusy: Bool { queue.sync { !lanes.isEmpty } }
+    public var recentErrors: [String] { queue.sync { errors } }
+    public var recentMeasurements: [RoutingMeasurement] { queue.sync { measurements } }
+
+    /// 诊断 UI 异步取快照，避免大批量匹配时占用主线程等待。
+    public func diagnostics(completion: @escaping ([String], [RoutingMeasurement]) -> Void) {
+        queue.async {
+            let errors = self.errors
+            let measurements = self.measurements
+            DispatchQueue.main.async { completion(errors, measurements) }
+        }
     }
 
-    /// 配置变更后热更新规则引擎（设置窗口保存后调用）。
+    /// 与 handle 在同一串行队列提交：保存后的下一批请求使用新配置。
+    /// 已在途/排队的 Item 自带原配置的 fallback，不受后续编辑影响。
     public func reload(configuration: Configuration) {
-        engine = RuleEngine(configuration: configuration)
+        queue.async {
+            self.engine = RuleEngine(configuration: configuration)
+            self.resolver.invalidate()
+        }
     }
 
-    /// 接收文件 URL（主线程调用）。
-    public func handle(urls: [URL]) {
-        for url in urls {
-            guard url.isFileURL else { continue }
-            let standardized = url.standardizedFileURL
-            guard seenPaths.insert(standardized.path).inserted else { continue }
-            pending.append(standardized)
+    public func invalidateApplications() { resolver.invalidate() }
+
+    public func handle(urls: [URL], receivedAt: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        queue.async {
+            let routingStart = Self.now
+            var items: [Item] = []
+            for url in urls where url.isFileURL {
+                let url = url.standardizedFileURL
+                guard self.seenPaths.insert(url.path).inserted else { continue }
+                let decision = self.engine.resolveDecision(for: url)
+                let target: ApplicationReference
+                let fallback: ApplicationReference?
+                switch decision {
+                case .rule(let application):
+                    target = application
+                    fallback = self.engine.fallbackApplication(for: url)
+                case .fallback(let application):
+                    target = application
+                    fallback = nil
+                case .none:
+                    self.seenPaths.remove(url.path)
+                    self.recordError("无法路由: \(Self.redacted(url.path))")
+                    continue
+                }
+                items.append(Item(url: url, target: target, fallback: fallback,
+                                  receivedAt: receivedAt, routingMilliseconds: (Self.now - routingStart) * 1000))
+            }
+            self.enqueue(items)
         }
-        guard !pending.isEmpty else { return }
-        resetKeepAlive()
     }
 
-    // MARK: - 保活
+    private static var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
-    private func resetKeepAlive() {
-        workItem?.cancel()
-        let item = DispatchWorkItem { [weak self] in
-            Task { @MainActor [weak self] in self?.flush() }
+    private func enqueue(_ items: [Item]) {
+        var targets: [String] = []
+        for item in items {
+            let key = item.target.bundleIdentifier
+            if !targets.contains(key) { targets.append(key) }
+            lanes[key, default: Lane()].pending.append(item)
         }
-        workItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + keepAliveInterval, execute: item)
+        for key in targets { startNext(for: key) }
     }
 
-    private func flush() {
-        // flush 期间又来事件：并入 deferred，本次 flush 完成后重排。
-        if isFlushing {
-            deferred.append(contentsOf: pending)
-            pending.removeAll()
-            return
-        }
-        isFlushing = true
-        let batch = pending
-        pending.removeAll()
+    private func startNext(for key: String) {
+        guard var lane = lanes[key], lane.active == nil else { return }
+        guard !lane.pending.isEmpty else { lanes.removeValue(forKey: key); return }
+        let items = lane.pending
+        lane.pending.removeAll()
+        let id = UUID()
+        let timeout = DispatchWorkItem { [weak self] in self?.timedOut(key: key, id: id) }
+        let job = Job(id: id, items: items, startedAt: Self.now, timeout: timeout)
+        lane.active = job
+        lanes[key] = lane
+        queue.asyncAfter(deadline: .now() + requestTimeout, execute: timeout)
 
-        process(batch) { [weak self] in
-            Task { @MainActor [weak self] in
+        // NSWorkspace 查找可能慢：每个目标独立执行，状态队列不做系统 I/O。
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let appURL = self.resolver.applicationURL(for: items[0].target)
+            let resolution = (Self.now - job.startedAt) * 1000
+            self.queue.async {
+                guard self.lanes[key]?.active?.id == id else { return }
+                guard let appURL else {
+                    self.missingTarget(key: key, job: job, resolution: resolution)
+                    return
+                }
+                self.dispatch(job: job, key: key, appURL: appURL, resolution: resolution)
+            }
+        }
+    }
+
+    private func dispatch(job: Job, key: String, appURL: URL, resolution: Double) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            self.opening.open(job.items.map(\.url), in: appURL, openByBundleID: self.openByBundleID, willOpen: {
+                self.queue.sync {
+                    guard self.lanes[key]?.active?.id == job.id else { return false }
+                    self.appendMeasurement(job: job, resolution: resolution, dispatchedAt: Self.now, status: "已转发")
+                    return true
+                }
+            }) { [weak self] result in
                 guard let self else { return }
-                self.isFlushing = false
-                if !self.deferred.isEmpty {
-                    self.pending.append(contentsOf: self.deferred)
-                    self.deferred.removeAll()
-                    self.resetKeepAlive()
-                } else {
-                    self.maybeTerminate()
-                }
-            }
-        }
-    }
-
-    // MARK: - 路由
-
-    private func process(_ urls: [URL], completion: @escaping () -> Void) {
-        let result = BatchRouter.group(urls, engine: engine)
-        for url in result.unrouted {
-            recordError("无法路由: \(Self.redacted(url.path))")
-        }
-
-        let group = DispatchGroup()
-
-        for (target, targetURLs) in result.groups {
-            if let appURL = resolver.applicationURL(for: target) {
-                group.enter()
-                opening.open(targetURLs, in: appURL, openByBundleID: openByBundleID) { [weak self] result in
-                    if case .failure(let error) = result {
-                        self?.recordError("\(target.displayName): \(error.localizedDescription)")
+                self.queue.async {
+                    guard self.lanes[key]?.active?.id == job.id else { return }
+                    if !self.measurements.contains(where: { $0.id == job.id }) {
+                        self.appendMeasurement(job: job, resolution: resolution, dispatchedAt: nil, status: "未转发")
                     }
-                    group.leave()
+                    if case .failure(let error) = result {
+                        self.resolver.invalidate(bundleIdentifier: key)
+                        self.recordError("\(job.items[0].target.displayName): \(error.localizedDescription)")
+                        self.finishMeasurement(job: job, status: "转发失败")
+                    } else {
+                        self.finishMeasurement(job: job, status: "系统已确认")
+                    }
+                    self.finish(key: key, job: job)
                 }
+            }
+        }
+    }
+
+    private func missingTarget(key: String, job: Job, resolution: Double) {
+        appendMeasurement(job: job, resolution: resolution, dispatchedAt: nil, status: "目标缺失")
+        var fallbacks: [Item] = []
+        for item in job.items {
+            if let fallback = item.fallback, fallback.bundleIdentifier != key {
+                fallbacks.append(Item(url: item.url, target: fallback, fallback: nil,
+                                      receivedAt: item.receivedAt, routingMilliseconds: item.routingMilliseconds))
             } else {
-                // 目标应用缺失 → 逐文件降级到其 handler 的 fallback（本身就是 fallback 的则报错）。
-                fallbackForMissingTarget(target: target, urls: targetURLs, group: group)
+                seenPaths.remove(item.url.path)
+                recordError("目标应用缺失: \(Self.redacted(item.url.path))")
             }
         }
-
-        group.notify(queue: .main) { completion() }
+        job.timeout.cancel()
+        lanes[key]?.active = nil
+        // 缺失目标的 fallback 也走目标队列，批量合并且不覆盖其他在途请求。
+        enqueue(fallbacks)
+        startNext(for: key)
     }
 
-    private func fallbackForMissingTarget(target: ApplicationReference, urls: [URL], group: DispatchGroup) {
-        for url in urls {
-            // 只有命中规则（.rule）才降级到 fallback；命中 fallback 本身则无更低级可降。
-            guard case .rule = engine.resolveDecision(for: url),
-                  let fallback = engine.fallbackApplication(for: url),
-                  fallback != target else {
-                recordError("目标应用缺失: \(Self.redacted(url.path))")
-                continue
-            }
-            guard let fallbackURL = resolver.applicationURL(for: fallback) else {
-                recordError("目标与回退应用均缺失: \(Self.redacted(url.path))")
-                continue
-            }
-            group.enter()
-            opening.open([url], in: fallbackURL, openByBundleID: openByBundleID) { [weak self] result in
-                if case .failure(let error) = result {
-                    self?.recordError("\(fallback.displayName): \(error.localizedDescription)")
-                }
-                group.leave()
-            }
+    private func timedOut(key: String, id: UUID) {
+        guard let job = lanes[key]?.active, job.id == id else { return }
+        resolver.invalidate(bundleIdentifier: key)
+        recordError("\(job.items[0].target.displayName): 打开请求超时，未自动重发；请检查目标应用")
+        if measurements.contains(where: { $0.id == id }) {
+            finishMeasurement(job: job, status: "超时")
+        } else {
+            appendMeasurement(job: job, resolution: (Self.now - job.startedAt) * 1000,
+                              dispatchedAt: nil, status: "定位超时")
         }
+        finish(key: key, job: job)
     }
 
-    // MARK: - 退出
+    private func finish(key: String, job: Job) {
+        job.timeout.cancel()
+        for item in job.items { seenPaths.remove(item.url.path) }
+        lanes[key]?.active = nil
+        startNext(for: key)
+    }
 
-    private func maybeTerminate() {
-        guard shouldTerminateIfIdle() else { return }
-        // 退出前小宽限，吸收"flush 恰逢下一批到达"的边界。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-            guard let self, !self.isBusy else { return }
-            NSApp.terminate(nil)
-        }
+    private func appendMeasurement(job: Job, resolution: Double, dispatchedAt: TimeInterval?, status: String) {
+        let received = job.items.map(\.receivedAt).min() ?? job.startedAt
+        let route = job.items.map(\.routingMilliseconds).max() ?? 0
+        measurements.append(RoutingMeasurement(
+            id: job.id, target: job.items[0].target.displayName, fileCount: job.items.count,
+            routingMilliseconds: route,
+            queueMilliseconds: max(0, (job.startedAt - received) * 1000 - route),
+            resolutionMilliseconds: resolution,
+            dispatchMilliseconds: dispatchedAt.map { ($0 - received) * 1000 },
+            completionMilliseconds: nil, status: status
+        ))
+        if measurements.count > 100 { measurements.removeFirst(measurements.count - 100) }
+    }
+
+    private func finishMeasurement(job: Job, status: String) {
+        guard let index = measurements.firstIndex(where: { $0.id == job.id }) else { return }
+        let received = job.items.map(\.receivedAt).min() ?? job.startedAt
+        measurements[index].completionMilliseconds = (Self.now - received) * 1000
+        measurements[index].status = status
     }
 
     private func recordError(_ message: String) {
-        recentErrors.append(message)
-        if recentErrors.count > maxErrors {
-            recentErrors.removeFirst(recentErrors.count - maxErrors)
-        }
+        errors.append(message)
+        if errors.count > 20 { errors.removeFirst(errors.count - 20) }
     }
 
-    /// 隐私：用户目录缩写为 `~`。
     static func redacted(_ path: String) -> String {
         let home = NSHomeDirectory()
-        if path.hasPrefix(home) {
-            return "~" + path.dropFirst(home.count)
-        }
+        if path == home || path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
         return path
     }
 }

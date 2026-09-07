@@ -1,76 +1,80 @@
 import Foundation
 import UniformTypeIdentifiers
 
-/// 纯函数式路由引擎：注入不可变 Configuration 快照，对文件 URL 输出路由决策。
-/// 不做任何文件系统、NSWorkspace 或网络 I/O。
-///
-/// 性能：目录组件在 init 预计算（文档第 9 节），文件路径每个文件只标准化一次；
-/// 规则循环是纯数组前缀比较，1,000 条规则单文件匹配 < 1ms。
+/// 不可变配置快照；规则预编译，类型匹配结果按扩展名缓存。
+/// 缓存有锁且有容量/有效期限制，快照可安全地交给后台路由队列。
 public struct RuleEngine {
     public let configuration: Configuration
-    /// 规则 id → 标准化目录组件（路由热路径不复算）。
-    private let normalizedFolderComponents: [UUID: [String]]
+    private struct CompiledHandler {
+        let handler: FileHandler
+        let type: UTType?
+        let extensions: Set<String>
+        let rules: [(rule: FolderRule, components: [String])]
+    }
+    private final class TypeCache {
+        let lock = NSLock()
+        var indices: [String: Int] = [:]
+        var expiresAt = ProcessInfo.processInfo.systemUptime + 300
+    }
+    private let handlers: [CompiledHandler]
+    private let cache = TypeCache()
 
     public init(configuration: Configuration) {
         self.configuration = configuration
-        var map: [UUID: [String]] = [:]
-        for handler in configuration.handlers {
-            for rule in handler.rules {
-                map[rule.id] = PathMatcher.normalizedComponents(of: rule.folderPath)
-            }
+        handlers = configuration.handlers.filter(\.enabled).map { handler in
+            let type = UTType(handler.contentTypeIdentifier)
+            return CompiledHandler(
+                handler: handler,
+                type: type,
+                extensions: Set((handler.displayExtensions + (type?.tags[.filenameExtension] ?? [])).map { $0.lowercased() }),
+                rules: handler.rules.filter(\.enabled).map { ($0, PathMatcher.normalizedComponents(of: $0.folderPath)) }
+            )
         }
-        self.normalizedFolderComponents = map
     }
 
-    /// 对单个文件求路由决策。
     public func resolveDecision(for fileURL: URL) -> RoutingDecision {
-        guard fileURL.isFileURL else { return .none }
-        guard let handler = matchingHandler(for: fileURL) else { return .none }
-
-        // 文件路径只标准化一次。
-        let fileComponents = PathMatcher.normalizedComponents(of: fileURL.path)
-
-        // 规则从上到下，第一条命中即停止（first-match-wins）。
-        for rule in handler.rules where rule.enabled {
-            guard let folderComponents = normalizedFolderComponents[rule.id] else { continue }
-            if PathMatcher.isPath(fileComponents, insideFolder: folderComponents, includesDescendants: rule.includesDescendants) {
+        guard fileURL.isFileURL, let index = matchingHandlerIndex(for: fileURL) else { return .none }
+        let compiled = handlers[index]
+        let components = PathMatcher.normalizedComponents(of: fileURL.path)
+        for (rule, folder) in compiled.rules {
+            if PathMatcher.isPath(components, insideFolder: folder, includesDescendants: rule.includesDescendants) {
                 return .rule(rule.targetApplication)
             }
         }
-        return .fallback(handler.fallbackApplication)
+        return .fallback(compiled.handler.fallbackApplication)
     }
 
-    /// 找第一个启用的、能处理该文件的 handler。
-    private func matchingHandler(for fileURL: URL) -> FileHandler? {
-        let fileExtension = fileURL.pathExtension
-        let fileType = UTType(filenameExtension: fileExtension)
-
-        for handler in configuration.handlers where handler.enabled {
-            if handlerMatches(handler, fileExtension: fileExtension, fileType: fileType) {
-                return handler
-            }
-        }
-        return nil
-    }
-
-    /// 该文件所属 handler 的回退应用（用于"规则目标缺失时降级到 fallback"）。
     public func fallbackApplication(for fileURL: URL) -> ApplicationReference? {
-        matchingHandler(for: fileURL)?.fallbackApplication
+        guard fileURL.isFileURL, let index = matchingHandlerIndex(for: fileURL) else { return nil }
+        return handlers[index].handler.fallbackApplication
     }
 
-    private func handlerMatches(_ handler: FileHandler, fileExtension: String, fileType: UTType?) -> Bool {
-        let handlerType = UTType(handler.contentTypeIdentifier)
-
-        if let fileType {
-            // 文件类型等于 handler 类型，或存在继承关系（任意方向）。
-            if fileType.identifier == handler.contentTypeIdentifier { return true }
-            if let handlerType {
-                if fileType.conforms(to: handlerType) { return true }
-                if handlerType.conforms(to: fileType) { return true }
-            }
+    private func matchingHandlerIndex(for fileURL: URL) -> Int? {
+        let ext = fileURL.pathExtension.lowercased()
+        cache.lock.lock()
+        if ProcessInfo.processInfo.systemUptime >= cache.expiresAt {
+            cache.indices.removeAll(keepingCapacity: true)
+            cache.expiresAt = ProcessInfo.processInfo.systemUptime + 300
         }
-        // 扩展名兜底匹配（大小写不敏感）。
-        return handler.displayExtensions.contains(where: { $0.lowercased() == fileExtension.lowercased() })
+        let cached = cache.indices[ext]
+        cache.lock.unlock()
+        if let cached { return cached < 0 ? nil : cached }
+
+        // 必须按原有 handler 优先级求完整匹配，不能让扩展名捷径越过通用类型。
+        let fileType = UTType(filenameExtension: ext)
+        let index = handlers.firstIndex { compiled in
+            if let fileType {
+                if fileType.identifier == compiled.handler.contentTypeIdentifier { return true }
+                if let type = compiled.type,
+                   fileType.conforms(to: type) || type.conforms(to: fileType) { return true }
+            }
+            return compiled.extensions.contains(ext)
+        }
+        cache.lock.lock()
+        if cache.indices.count >= 256 { cache.indices.removeAll(keepingCapacity: true) }
+        cache.indices[ext] = index ?? -1
+        cache.lock.unlock()
+        return index
     }
 }
 
