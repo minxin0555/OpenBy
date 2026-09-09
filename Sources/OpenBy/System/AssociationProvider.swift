@@ -94,6 +94,39 @@ public final class AssociationService {
         provider.currentDefaultApplicationBundleID(toOpen: contentType)
     }
 
+    /// 顺序申请整组关联；已启用的成员跳过，失败时保留可重试的真实部分状态。
+    public func takeOverGroup(
+        contentTypes: [UTType], targetAppURL: URL, openByBundleID: String,
+        completion: @escaping (Result<Bool, Error>) -> Void
+    ) {
+        guard let first = contentTypes.first else { completion(.success(true)); return }
+        let next = {
+            self.takeOverGroup(contentTypes: Array(contentTypes.dropFirst()), targetAppURL: targetAppURL,
+                               openByBundleID: openByBundleID, completion: completion)
+        }
+        if isManagedByOpenBy(contentType: first, openByBundleID: openByBundleID) { next(); return }
+        takeOver(contentType: first, targetAppURL: targetAppURL, openByBundleID: openByBundleID) { result in
+            if case .success(true) = result { next() } else { completion(result) }
+        }
+    }
+
+    /// 已被用户改用其他应用的成员视为完成；缺少恢复记录时保留组配置。
+    public func restoreGroup(
+        contentTypes: [UTType], previous: [String: ApplicationReference], openByBundleID: String,
+        completion: @escaping (Result<Bool, Error>) -> Void
+    ) {
+        guard let first = contentTypes.first else { completion(.success(true)); return }
+        let next = {
+            self.restoreGroup(contentTypes: Array(contentTypes.dropFirst()), previous: previous,
+                              openByBundleID: openByBundleID, completion: completion)
+        }
+        if !isManagedByOpenBy(contentType: first, openByBundleID: openByBundleID) { next(); return }
+        guard let original = previous[first.identifier] else { completion(.success(false)); return }
+        restorePreviousDefault(contentType: first, previous: original, openByBundleID: openByBundleID) { result in
+            if case .success(true) = result { next() } else { completion(result) }
+        }
+    }
+
     /// 异步接管：设置默认，完成后重读验证（macOS 26.4+ 可能弹系统确认框，当正常流程）。
     /// Result.success(true) = 已接管；false = 用户拒绝或尚未生效。
     public func takeOver(

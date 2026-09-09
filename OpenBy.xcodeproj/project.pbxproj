@@ -21,7 +21,6 @@
 		5CF4852A510AA0D063D4B547 /* ConfigurationMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 155E5ED71D29D6CB330BDFC8 /* ConfigurationMigrationTests.swift */; };
 		6CEB7759EF35F448367481A9 /* ConfigurationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5B46EF0D29DDECD496F0E63 /* ConfigurationStore.swift */; };
 		85B3DA710727395F2D8CAA79 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9CE2EDC91000CAC929B1160 /* main.swift */; };
-		8CD068D635DADF4AFF4684E8 /* DiagnosticsViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 358B0FFF8B69F3F89F868918 /* DiagnosticsViewController.swift */; };
 		903A84835904FF1A64771070 /* OpenBy.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4E646CFA76DD9146BF5F4403 /* OpenBy.framework */; };
 		904C8DA339EF8B4C6668C3F0 /* Harness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A6A37113C74738143DCC770 /* Harness.swift */; };
 		98936DF99CB29E9CBEFE5D21 /* AssociationProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A99886853BD9EE31CAAA9B2 /* AssociationProvider.swift */; };
@@ -70,7 +69,6 @@
 		189909459911301B010E18C2 /* ApplicationResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationResolverTests.swift; sourceTree = "<group>"; };
 		1A6A37113C74738143DCC770 /* Harness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Harness.swift; sourceTree = "<group>"; };
 		2D4871E80E209DA73E486753 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
-		358B0FFF8B69F3F89F868918 /* DiagnosticsViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsViewController.swift; sourceTree = "<group>"; };
 		35EE3D3E3ACC42EF34B59F23 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		3A2755236CAC7B61409347DC /* HandlersViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandlersViewController.swift; sourceTree = "<group>"; };
 		3A42A17BD32CB26884917040 /* OpenByBenchmark */ = {isa = PBXFileReference; includeInIndex = 0; path = OpenByBenchmark; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -140,7 +138,6 @@
 		13F270280F491CC3A43BE2C5 /* UI */ = {
 			isa = PBXGroup;
 			children = (
-				358B0FFF8B69F3F89F868918 /* DiagnosticsViewController.swift */,
 				3A2755236CAC7B61409347DC /* HandlersViewController.swift */,
 				B2CC6E18D8D7D07D59339E39 /* PathInput.swift */,
 				C27B298C08518DE1CBBB719F /* RulesViewController.swift */,
@@ -426,7 +423,6 @@
 				98936DF99CB29E9CBEFE5D21 /* AssociationProvider.swift in Sources */,
 				2B60A67C7A9CA7139629B7CC /* ConfigurationMigration.swift in Sources */,
 				6CEB7759EF35F448367481A9 /* ConfigurationStore.swift in Sources */,
-				8CD068D635DADF4AFF4684E8 /* DiagnosticsViewController.swift in Sources */,
 				15F4CA599E1B2204BF36C1EB /* HandlersViewController.swift in Sources */,
 				382D5F67F62CF82C9370752C /* Models.swift in Sources */,
 				AE3E1A06AA36DA6152D67B52 /* OpenRequestCoordinator.swift in Sources */,

@@ -10,7 +10,7 @@ enum ConfigurationStoreTests {
     }
 
     static func sampleConfiguration() -> Configuration {
-        Configuration(schemaVersion: 1, handlers: [
+        Configuration(schemaVersion: ConfigurationMigration.currentVersion, handlers: [
             FileHandler(
                 contentTypeIdentifier: "com.adobe.pdf",
                 fallbackApplication: ApplicationReference(bundleIdentifier: "com.apple.Preview", displayName: "Preview"),
@@ -71,7 +71,7 @@ enum ConfigurationStoreTests {
             try Data("corrupted".utf8).write(to: url)
             try Data("also corrupted".utf8).write(to: url.appendingPathExtension("bak"))
             let loaded = store.load()
-            try expectEqual(loaded, Configuration(schemaVersion: 1, handlers: []))
+            try expectEqual(loaded, Configuration(schemaVersion: ConfigurationMigration.currentVersion, handlers: []))
             cleanup(url)
         }),
 
@@ -79,7 +79,7 @@ enum ConfigurationStoreTests {
             let url = makeTempConfigURL()
             let store = ConfigurationStore(fileURL: url)
             let loaded = store.load()
-            try expectEqual(loaded, Configuration(schemaVersion: 1, handlers: []))
+            try expectEqual(loaded, Configuration(schemaVersion: ConfigurationMigration.currentVersion, handlers: []))
             cleanup(url)
         }),
     ]

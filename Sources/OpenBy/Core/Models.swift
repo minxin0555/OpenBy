@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 /// 顶层配置。schemaVersion 用于未来迁移；handler 顺序即优先级。
 public struct Configuration: Codable, Equatable, Sendable {
@@ -18,6 +19,10 @@ public struct FileHandler: Codable, Equatable, Identifiable, Sendable {
     public var contentTypeIdentifier: String
     /// 用户展示与初始解析用的扩展名，例如 `["pdf"]`。
     public var displayExtensions: [String]
+    /// 非 nil 表示显式格式组，路由只匹配组中列出的后缀。
+    public var groupName: String?
+    /// 每种系统文件类型分别保留原应用，整组停用时逐一恢复。
+    public var previousDefaultApplications: [String: ApplicationReference]?
     public var enabled: Bool
     /// 未命中任何规则时使用的应用。
     public var fallbackApplication: ApplicationReference
@@ -33,7 +38,9 @@ public struct FileHandler: Codable, Equatable, Identifiable, Sendable {
         enabled: Bool = true,
         previousDefaultApplication: ApplicationReference? = nil,
         rules: [FolderRule] = [],
-        id: UUID = UUID()
+        id: UUID = UUID(),
+        groupName: String? = nil,
+        previousDefaultApplications: [String: ApplicationReference]? = nil
     ) {
         self.id = id
         self.contentTypeIdentifier = contentTypeIdentifier
@@ -42,6 +49,47 @@ public struct FileHandler: Codable, Equatable, Identifiable, Sendable {
         self.fallbackApplication = fallbackApplication
         self.previousDefaultApplication = previousDefaultApplication
         self.rules = rules
+        self.groupName = groupName
+        self.previousDefaultApplications = previousDefaultApplications
+    }
+
+    public var contentTypes: [UTType] {
+        guard groupName != nil else { return UTType(contentTypeIdentifier).map { [$0] } ?? [] }
+        var seen = Set<String>()
+        return displayExtensions.compactMap { UTType(filenameExtension: $0) }
+            .filter { seen.insert($0.identifier).inserted }
+    }
+}
+
+/// 预设只填充可编辑草稿；保存后以用户确认的后缀为准。
+public enum FormatGroups {
+    public static let presets: [(name: String, extensions: [String])] = [
+        ("常见图片", ["jpg", "jpeg", "png", "gif", "webp", "heic", "bmp", "tif", "tiff", "svg"]),
+        ("常见视频", ["mp4", "mov", "mkv", "avi", "m4v", "webm"]),
+        ("常见音频", ["mp3", "m4a", "wav", "flac", "aac", "aiff", "ogg"]),
+        ("常见文档", ["pdf", "txt", "md", "rtf", "doc", "docx", "xls", "xlsx", "ppt", "pptx"]),
+    ]
+
+    public static func normalizedExtension(_ input: String) -> String? {
+        var ext = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if ext.hasPrefix(".") { ext.removeFirst() }
+        let forbidden = CharacterSet.whitespacesAndNewlines.union(.controlCharacters)
+            .union(CharacterSet(charactersIn: ". /\\:*?\"<>|,;，；"))
+        guard !ext.isEmpty, ext.rangeOfCharacter(from: forbidden) == nil else { return nil }
+        return ext
+    }
+
+    public static func parseExtensions(_ input: String) -> [String]? {
+        let separators = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ",;，；"))
+        let parts = input.components(separatedBy: separators).filter { !$0.isEmpty }
+        guard !parts.isEmpty else { return nil }
+        var seen = Set<String>()
+        var result: [String] = []
+        for part in parts {
+            guard let ext = normalizedExtension(part) else { return nil }
+            if seen.insert(ext).inserted { result.append(ext) }
+        }
+        return result
     }
 }
 

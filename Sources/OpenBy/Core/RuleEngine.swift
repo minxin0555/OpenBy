@@ -63,6 +63,9 @@ public struct RuleEngine {
         // 必须按原有 handler 优先级求完整匹配，不能让扩展名捷径越过通用类型。
         let fileType = UTType(filenameExtension: ext)
         let index = handlers.firstIndex { compiled in
+            if compiled.handler.groupName != nil {
+                return compiled.handler.displayExtensions.contains { $0.lowercased() == ext }
+            }
             if let fileType {
                 if fileType.identifier == compiled.handler.contentTypeIdentifier { return true }
                 if let type = compiled.type,

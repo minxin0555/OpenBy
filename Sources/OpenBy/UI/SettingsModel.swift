@@ -10,8 +10,6 @@ final class SettingsModel {
     let associationService: AssociationService
     let openByBundleID: String?
     var onConfigurationChanged: (() -> Void)?
-    var startupMilliseconds: Double = 0
-    var diagnosticsProvider: (@escaping ([String], [RoutingMeasurement]) -> Void) -> Void = { $0([], []) }
 
     private(set) var configuration: Configuration
 
@@ -47,14 +45,10 @@ final class SettingsModel {
     /// 添加扩展名。返回新建 handler，或 nil（解析失败 / 重复）。
     @discardableResult
     func addHandler(extension ext: String) -> FileHandler? {
-        let ext = ext.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !ext.isEmpty, !ext.contains(".") else { return nil }
+        guard let ext = Self.normalizedExtension(ext) else { return nil }
         guard let type = UTType(filenameExtension: ext) else { return nil }
 
-        let duplicates = configuration.handlers.contains {
-            $0.contentTypeIdentifier == type.identifier || $0.displayExtensions.contains(ext)
-        }
-        guard !duplicates else { return nil }
+        guard conflictingHandler(extensions: [ext]) == nil else { return nil }
 
         // fallback = 当前该类型默认应用（通常是接管前的"预览"等）。
         let fallback = associationService.previousDefaultApplication(for: type, unlessBundleID: openByBundleID ?? "")
@@ -63,6 +57,52 @@ final class SettingsModel {
         let handler = FileHandler(contentTypeIdentifier: type.identifier, fallbackApplication: fallback, displayExtensions: [ext])
         save { $0.handlers.append(handler) }
         return handler
+    }
+
+    static func normalizedExtension(_ input: String) -> String? {
+        FormatGroups.normalizedExtension(input)
+    }
+
+    func conflictingHandler(extensions: [String], excluding id: UUID? = nil) -> FileHandler? {
+        let identifiers = Set(extensions.compactMap { UTType(filenameExtension: $0)?.identifier })
+        return configuration.handlers.first { handler in
+            handler.id != id && (
+                !Set(handler.displayExtensions).isDisjoint(with: extensions) ||
+                handler.contentTypes.contains { identifiers.contains($0.identifier) }
+            )
+        }
+    }
+
+    func saveGroup(name: String, extensions: [String], editing id: UUID?) throws -> FileHandler {
+        guard let first = extensions.first, let type = UTType(filenameExtension: first) else {
+            throw NSError(domain: "OpenBy", code: 2, userInfo: [NSLocalizedDescriptionKey: "没有可用的文件格式。"])
+        }
+        var group: FileHandler
+        if let id, let existing = handler(id: id) {
+            group = existing
+            if group.previousDefaultApplications == nil { group.previousDefaultApplications = [:] }
+            if let previous = group.previousDefaultApplication {
+                group.previousDefaultApplications?[group.contentTypeIdentifier] = previous
+            }
+        } else {
+            let fallback = associationService.previousDefaultApplication(for: type, unlessBundleID: openByBundleID ?? "")
+                ?? ApplicationReference(bundleIdentifier: "", displayName: "未指定")
+            group = FileHandler(contentTypeIdentifier: type.identifier, fallbackApplication: fallback)
+        }
+        group.groupName = name
+        group.displayExtensions = extensions
+        group.contentTypeIdentifier = type.identifier
+        group.previousDefaultApplication = nil
+        let retainedTypes = Set(group.contentTypes.map(\.identifier))
+        group.previousDefaultApplications = group.previousDefaultApplications?.filter { retainedTypes.contains($0.key) }
+        var updated = configuration
+        if let index = updated.handlers.firstIndex(where: { $0.id == group.id }) {
+            updated.handlers[index] = group
+        } else { updated.handlers.append(group) }
+        try store.save(updated)
+        configuration = updated
+        onConfigurationChanged?()
+        return group
     }
 
     func removeHandler(id: UUID) {
@@ -79,54 +119,62 @@ final class SettingsModel {
 
     // MARK: - 接管 / 恢复
 
-    /// 设为默认：先记录接管前默认，再异步接管并验证。
+    func managedCount(_ handler: FileHandler) -> Int {
+        handler.contentTypes.filter {
+            associationService.isManagedByOpenBy(contentType: $0, openByBundleID: openByBundleID ?? "")
+        }.count
+    }
+
+    func isManaged(handler: FileHandler, contentType: UTType) -> Bool {
+        !handler.contentTypes.isEmpty && managedCount(handler) == handler.contentTypes.count
+    }
+
+    private func originalApplications(_ handler: FileHandler) -> [String: ApplicationReference] {
+        var originals = handler.previousDefaultApplications ?? [:]
+        if let previous = handler.previousDefaultApplication, originals[handler.contentTypeIdentifier] == nil {
+            originals[handler.contentTypeIdentifier] = previous
+        }
+        return originals
+    }
+
+    /// 先持久化每种格式的恢复记录，再申请系统关联。
     func takeOver(handlerID: UUID, contentType: UTType, completion: @escaping (Result<Bool, Error>) -> Void) {
-        guard let ownBundleID = openByBundleID else {
+        guard let ownBundleID = openByBundleID, let handler = handler(id: handlerID) else {
             completion(.failure(RoutingError.recursiveTarget(bundleIdentifier: "OpenBy")))
             return
         }
         guard Bundle.main.bundleURL.pathExtension == "app" else {
-            completion(.failure(NSError(
-                domain: "OpenBy", code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "请从 .app 包中运行应用后再接管默认关联"]
-            )))
+            completion(.failure(NSError(domain: "OpenBy", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "请从 .app 包中运行应用后再启用自动打开"])))
             return
         }
-        // 记录接管前默认（仅当尚未记录，避免覆盖）。
-        if let previous = associationService.previousDefaultApplication(for: contentType, unlessBundleID: ownBundleID) {
-            updateHandler(id: handlerID) { handler in
-                if handler.previousDefaultApplication == nil {
-                    handler.previousDefaultApplication = previous
-                }
+        var originals = originalApplications(handler)
+        for type in handler.contentTypes {
+            if let previous = associationService.previousDefaultApplication(for: type, unlessBundleID: ownBundleID) {
+                originals[type.identifier] = previous
             }
         }
-        associationService.takeOver(
-            contentType: contentType,
-            targetAppURL: Bundle.main.bundleURL,
-            openByBundleID: ownBundleID
-        ) { result in
-            completion(result)
-        }
+        var updated = configuration
+        guard let index = updated.handlers.firstIndex(where: { $0.id == handlerID }) else { return }
+        updated.handlers[index].previousDefaultApplications = originals
+        do {
+            try store.save(updated)
+            configuration = updated
+            onConfigurationChanged?()
+        } catch { completion(.failure(error)); return }
+        associationService.takeOverGroup(contentTypes: handler.contentTypes, targetAppURL: Bundle.main.bundleURL,
+                                         openByBundleID: ownBundleID, completion: completion)
     }
 
-    /// 停止接管：仅当当前默认仍是 OpenBy 时恢复接管前默认。
     func restoreDefault(handlerID: UUID, contentType: UTType, completion: @escaping (Result<Bool, Error>) -> Void) {
-        guard let previous = handler(id: handlerID)?.previousDefaultApplication,
-              let ownBundleID = openByBundleID else {
-            completion(.success(false))
-            return
-        }
-        associationService.restorePreviousDefault(
-            contentType: contentType,
-            previous: previous,
-            openByBundleID: ownBundleID
-        ) { result in
-            completion(result)
-        }
+        guard let handler = handler(id: handlerID) else { completion(.success(false)); return }
+        restoreTypes(handler: handler, types: handler.contentTypes, completion: completion)
     }
 
-    func isManaged(handler: FileHandler, contentType: UTType) -> Bool {
-        associationService.isManagedByOpenBy(contentType: contentType, openByBundleID: openByBundleID ?? "")
+    func restoreTypes(handler: FileHandler, types: [UTType], completion: @escaping (Result<Bool, Error>) -> Void) {
+        guard let ownBundleID = openByBundleID else { completion(.success(false)); return }
+        associationService.restoreGroup(contentTypes: types, previous: originalApplications(handler),
+                                        openByBundleID: ownBundleID, completion: completion)
     }
 
     // MARK: - 规则
@@ -178,20 +226,6 @@ final class SettingsModel {
 
     func handler(id: UUID) -> FileHandler? {
         configuration.handlers.first { $0.id == id }
-    }
-
-    // MARK: - 试测（不真正打开）
-
-    func describeRouting(for url: URL) -> String {
-        let engine = RuleEngine(configuration: configuration)
-        switch engine.resolveDecision(for: url) {
-        case .rule(let app):
-            return "命中规则 → \(app.displayName)（\(app.bundleIdentifier)）"
-        case .fallback(let app):
-            return "默认回退 → \(app.displayName)（\(app.bundleIdentifier)）"
-        case .none:
-            return "无匹配的处理器"
-        }
     }
 
     static func applicationReference(from url: URL) -> ApplicationReference {

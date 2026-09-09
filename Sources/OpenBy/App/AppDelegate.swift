@@ -15,7 +15,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var loginItem: NSMenuItem?
     private var workspaceObservers: [NSObjectProtocol] = []
     private let startedAt: TimeInterval
-    private var startupMilliseconds: Double = 0
     private var store: ConfigurationStore?
     private var resolver: ApplicationResolver?
     private var associationService: AssociationService?
@@ -50,7 +49,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.resolver = resolver
                 self.associationService = AssociationService(provider: WorkspaceDefaultAppProvider())
                 self.coordinator = coordinator
-                self.startupMilliseconds = (ProcessInfo.processInfo.systemUptime - self.startedAt) * 1000
                 self.observeWorkspace()
                 if !fileArgs.isEmpty {
                     self.didRouteFiles = true
@@ -88,7 +86,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func installMenu() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "arrow.triangle.branch", accessibilityDescription: "OpenBy")
+        let menuIcon = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "pdf")
+            .flatMap { NSImage(contentsOf: $0) }
+            ?? NSImage(systemSymbolName: "arrow.triangle.branch", accessibilityDescription: "OpenBy")
+        menuIcon?.size = NSSize(width: 18, height: 18)
+        menuIcon?.isTemplate = true
+        menuIcon?.accessibilityDescription = "OpenBy"
+        item.button?.image = menuIcon
         item.button?.toolTip = "OpenBy · 后台自动打开"
         let menu = NSMenu()
         menu.delegate = self
@@ -170,12 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 openByBundleID: Bundle.main.bundleIdentifier,
                 onConfigurationChanged: { [weak coordinator] in coordinator?.reload(configuration: store.snapshot()) }
             )
-            model.startupMilliseconds = startupMilliseconds
-            model.diagnosticsProvider = { [weak coordinator] completion in
-                guard let coordinator else { completion([], []); return }
-                coordinator.diagnostics(completion: completion)
-            }
-            controller = SettingsWindowController(model: model, recentErrorsProvider: { [] })
+            controller = SettingsWindowController(model: model)
             settingsController = controller
         }
         controller.show()

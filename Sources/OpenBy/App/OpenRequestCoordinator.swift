@@ -64,15 +64,6 @@ public final class OpenRequestCoordinator {
     public var recentErrors: [String] { queue.sync { errors } }
     public var recentMeasurements: [RoutingMeasurement] { queue.sync { measurements } }
 
-    /// 诊断 UI 异步取快照，避免大批量匹配时占用主线程等待。
-    public func diagnostics(completion: @escaping ([String], [RoutingMeasurement]) -> Void) {
-        queue.async {
-            let errors = self.errors
-            let measurements = self.measurements
-            DispatchQueue.main.async { completion(errors, measurements) }
-        }
-    }
-
     /// 与 handle 在同一串行队列提交：保存后的下一批请求使用新配置。
     /// 已在途/排队的 Item 自带原配置的 fallback，不受后续编辑影响。
     public func reload(configuration: Configuration) {

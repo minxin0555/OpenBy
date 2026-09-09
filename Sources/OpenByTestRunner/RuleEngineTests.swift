@@ -32,6 +32,42 @@ enum RuleEngineTests {
     }
 
     static let cases: [MiniTest.Case] = [
+        MiniTest.Case("图片预设去除 PNG 后不会被同类匹配重新加入", {
+            let extensions = FormatGroups.presets[0].extensions.filter { $0 != "png" } + ["avif"]
+            let group = FileHandler(contentTypeIdentifier: UTType.image.identifier, fallbackApplication: fallback,
+                displayExtensions: extensions, rules: [rule(folder: "/A", target: appA)], groupName: "图片")
+            let engine = RuleEngine(configuration: Configuration(schemaVersion: 2, handlers: [group]))
+            try expectEqual(engine.resolveDecision(for: URL(fileURLWithPath: "/A/a.png")), .none)
+            try expectEqual(engine.resolveDecision(for: URL(fileURLWithPath: "/A/a.jpg")), .rule(appA))
+            try expectEqual(engine.resolveDecision(for: URL(fileURLWithPath: "/A/a.avif")), .rule(appA))
+            try expectEqual(engine.resolveDecision(for: URL(fileURLWithPath: "/B/a.webp")), .fallback(fallback))
+        }),
+        MiniTest.Case("格式组只使用显式后缀，不自动扩展同类后缀", {
+            let group = FileHandler(contentTypeIdentifier: UTType.jpeg.identifier, fallbackApplication: fallback,
+                                    displayExtensions: ["jpg"], groupName: "只要 JPG")
+            let engine = RuleEngine(configuration: Configuration(schemaVersion: 2, handlers: [group]))
+            try expectEqual(engine.resolveDecision(for: URL(fileURLWithPath: "/a.JPG")), .fallback(fallback))
+            try expectEqual(engine.resolveDecision(for: URL(fileURLWithPath: "/a.jpeg")), .none)
+        }),
+        MiniTest.Case("格式组后缀解析去重并接受大小写和中文分隔符", {
+            try expectEqual(FormatGroups.parseExtensions(" .PNG，jpg; png\n.WEBP "), ["png", "jpg", "webp"])
+            try expectNil(FormatGroups.parseExtensions("   "))
+            try expectNil(FormatGroups.parseExtensions("png, /tmp/a.jpg"))
+            try expectNil(FormatGroups.parseExtensions("photo.png"))
+        }),
+        MiniTest.Case("不同格式组分别共享各自打开方式", {
+            let images = FileHandler(contentTypeIdentifier: UTType.jpeg.identifier, fallbackApplication: appA,
+                                     displayExtensions: ["jpg", "webp"], groupName: "图片")
+            let videos = FileHandler(contentTypeIdentifier: UTType.movie.identifier, fallbackApplication: appB,
+                                     displayExtensions: ["mp4", "mkv"], groupName: "视频")
+            let engine = RuleEngine(configuration: Configuration(schemaVersion: 2, handlers: [images, videos]))
+            for ext in ["jpg", "webp"] {
+                try expectEqual(engine.resolveDecision(for: URL(fileURLWithPath: "/a.\(ext)")), .fallback(appA))
+            }
+            for ext in ["mp4", "mkv"] {
+                try expectEqual(engine.resolveDecision(for: URL(fileURLWithPath: "/a.\(ext)")), .fallback(appB))
+            }
+        }),
         // MARK: 规则顺序
         MiniTest.Case("first-match-wins：第一条命中生效", {
             let config = Configuration(schemaVersion: 1, handlers: [

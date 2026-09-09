@@ -13,9 +13,7 @@ final class RulesViewController: NSViewController, NSTableViewDataSource, NSTabl
     private let addButton = NSButton(title: "添加规则…", target: nil, action: nil)
     private let editButton = NSButton(title: "编辑…", target: nil, action: nil)
     private let deleteButton = NSButton(title: "删除规则", target: nil, action: nil)
-    private let testButton = NSButton(title: "测试文件…", target: nil, action: nil)
     private let fallbackButton = NSButton(title: "更换默认应用…", target: nil, action: nil)
-    private let resultLabel = NSTextField(labelWithString: "")
     private let tipLabel = NSTextField(labelWithString: "规则从上到下匹配，第一条命中即生效。拖拽行可调整顺序。")
 
     private var handlerID: UUID?
@@ -54,8 +52,6 @@ final class RulesViewController: NSViewController, NSTableViewDataSource, NSTabl
         rebuildPopup()
         tableView.reloadData()
         renderHeader()
-        resultLabel.stringValue = ""
-        resultLabel.textColor = .secondaryLabelColor
     }
 
     // MARK: - UI
@@ -66,8 +62,6 @@ final class RulesViewController: NSViewController, NSTableViewDataSource, NSTabl
 
         headerLabel.font = .systemFont(ofSize: 12, weight: .medium)
         headerLabel.lineBreakMode = .byTruncatingTail
-        resultLabel.textColor = .secondaryLabelColor
-        resultLabel.lineBreakMode = .byTruncatingTail
         tipLabel.textColor = .secondaryLabelColor
         tipLabel.font = .systemFont(ofSize: 11)
         tipLabel.lineBreakMode = .byTruncatingTail
@@ -101,8 +95,6 @@ final class RulesViewController: NSViewController, NSTableViewDataSource, NSTabl
         editButton.action = #selector(editRow(_:))
         deleteButton.target = self
         deleteButton.action = #selector(deleteRule(_:))
-        testButton.target = self
-        testButton.action = #selector(testFile(_:))
         fallbackButton.target = self
         fallbackButton.action = #selector(changeFallback(_:))
 
@@ -114,11 +106,11 @@ final class RulesViewController: NSViewController, NSTableViewDataSource, NSTabl
         row2.orientation = .horizontal
         row2.spacing = 8
 
-        let row3 = NSStackView(views: [testButton, fallbackButton])
+        let row3 = NSStackView(views: [fallbackButton])
         row3.orientation = .horizontal
         row3.spacing = 8
 
-        for subview in [row1, scrollView, row2, row3, resultLabel, tipLabel] {
+        for subview in [row1, scrollView, row2, row3, tipLabel] {
             subview.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(subview)
         }
@@ -139,11 +131,8 @@ final class RulesViewController: NSViewController, NSTableViewDataSource, NSTabl
             row3.topAnchor.constraint(equalTo: row2.bottomAnchor, constant: 8),
             row3.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
 
-            resultLabel.topAnchor.constraint(equalTo: row3.bottomAnchor, constant: 8),
-            resultLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
-            resultLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
 
-            tipLabel.topAnchor.constraint(equalTo: resultLabel.bottomAnchor, constant: 4),
+            tipLabel.topAnchor.constraint(equalTo: row3.bottomAnchor, constant: 8),
             tipLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
             tipLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
             tipLabel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -12),
@@ -247,21 +236,6 @@ final class RulesViewController: NSViewController, NSTableViewDataSource, NSTabl
         let reference = SettingsModel.applicationReference(from: url)
         model.updateHandler(id: handler.id) { $0.fallbackApplication = reference }
         reload()
-    }
-
-    @objc private func testFile(_ sender: Any?) {
-        guard currentHandler != nil else { NSSound.beep(); return }
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.message = "选择任意文件，预览 OpenBy 将如何处理它（不会真正打开）"
-        panel.beginSheetModal(for: view.window ?? NSWindow()) { [weak self] response in
-            guard let self, response == .OK, let url = panel.url else { return }
-            let description = self.model.describeRouting(for: url)
-            self.resultLabel.stringValue = "\(url.lastPathComponent) → \(description)"
-            self.resultLabel.textColor = .labelColor
-        }
     }
 
     private func presentRuleEditor(existing: FolderRule?, for handler: FileHandler, onSaved: @escaping (FolderRule) -> Void) {

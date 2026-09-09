@@ -36,6 +36,62 @@ enum AssociationServiceTests {
     static let previewURL = URL(fileURLWithPath: "/System/Applications/Preview.app")
 
     static let cases: [MiniTest.Case] = [
+        MiniTest.Case("整组启用覆盖全部类型，重试跳过已启用类型", {
+            let fake = GroupDefaultAppProvider()
+            fake.current = [UTType.jpeg.identifier: "original.image", UTType.png.identifier: "original.png"]
+            let service = AssociationService(provider: fake, verifyAttempts: 0)
+            var captured: Result<Bool, Error>?
+            service.takeOverGroup(contentTypes: [.jpeg, .png], targetAppURL: fake.openByURL,
+                                  openByBundleID: openByBundleID) { captured = $0 }
+            try expectEqual(try expectNotNil(captured).get(), true)
+            try expectEqual(fake.calls, [UTType.jpeg.identifier, UTType.png.identifier])
+            service.takeOverGroup(contentTypes: [.jpeg, .png], targetAppURL: fake.openByURL,
+                                  openByBundleID: openByBundleID) { captured = $0 }
+            try expectEqual(fake.calls.count, 2)
+        }),
+        MiniTest.Case("整组启用部分失败后可恢复每种格式原应用", {
+            let fake = GroupDefaultAppProvider()
+            fake.current = [UTType.jpeg.identifier: "original.image", UTType.png.identifier: "original.png"]
+            fake.rejectedType = UTType.png.identifier
+            let service = AssociationService(provider: fake, verifyAttempts: 0)
+            var captured: Result<Bool, Error>?
+            service.takeOverGroup(contentTypes: [.jpeg, .png], targetAppURL: fake.openByURL,
+                                  openByBundleID: openByBundleID) { captured = $0 }
+            try expectEqual(try expectNotNil(captured).get(), false)
+            try expectEqual(fake.current[UTType.jpeg.identifier], openByBundleID)
+            fake.rejectedType = nil
+            let originals = [UTType.jpeg.identifier: ApplicationReference(bundleIdentifier: "original.image", displayName: "Images"),
+                             UTType.png.identifier: ApplicationReference(bundleIdentifier: "original.png", displayName: "PNG")]
+            service.restoreGroup(contentTypes: [.jpeg, .png], previous: originals,
+                                 openByBundleID: openByBundleID) { captured = $0 }
+            try expectEqual(try expectNotNil(captured).get(), true)
+            try expectEqual(fake.current[UTType.jpeg.identifier], "original.image")
+            try expectEqual(fake.current[UTType.png.identifier], "original.png")
+        }),
+        MiniTest.Case("整组恢复各自原应用且保留用户后来手动选择", {
+            let fake = GroupDefaultAppProvider()
+            fake.current = [UTType.jpeg.identifier: openByBundleID, UTType.png.identifier: openByBundleID,
+                            UTType.pdf.identifier: "user.choice"]
+            let service = AssociationService(provider: fake, verifyAttempts: 0)
+            let originals = [UTType.jpeg.identifier: ApplicationReference(bundleIdentifier: "original.image", displayName: "Images"),
+                             UTType.png.identifier: ApplicationReference(bundleIdentifier: "original.png", displayName: "PNG")]
+            var captured: Result<Bool, Error>?
+            service.restoreGroup(contentTypes: [.jpeg, .png, .pdf], previous: originals,
+                                 openByBundleID: openByBundleID) { captured = $0 }
+            try expectEqual(try expectNotNil(captured).get(), true)
+            try expectEqual(fake.current[UTType.jpeg.identifier], "original.image")
+            try expectEqual(fake.current[UTType.png.identifier], "original.png")
+            try expectEqual(fake.current[UTType.pdf.identifier], "user.choice")
+        }),
+        MiniTest.Case("缺少组成员恢复记录时不能宣称整组恢复完成", {
+            let fake = GroupDefaultAppProvider()
+            fake.current = [UTType.png.identifier: openByBundleID]
+            let service = AssociationService(provider: fake, verifyAttempts: 0)
+            var captured: Result<Bool, Error>?
+            service.restoreGroup(contentTypes: [.png], previous: [:], openByBundleID: openByBundleID) { captured = $0 }
+            try expectEqual(try expectNotNil(captured).get(), false)
+            try check(fake.calls.isEmpty)
+        }),
         // MARK: 接管前记录原默认
         MiniTest.Case("接管前：当前默认是其他应用 → 返回其引用", {
             let fake = FakeDefaultAppProvider()
@@ -149,4 +205,25 @@ enum AssociationServiceTests {
             try check(!service.isManagedByOpenBy(contentType: contentType, openByBundleID: openByBundleID))
         }),
     ]
+}
+
+private final class GroupDefaultAppProvider: DefaultAppProviding {
+    let openByURL = URL(fileURLWithPath: "/Applications/com.example.OpenBy.app")
+    var current: [String: String] = [:]
+    var calls: [String] = []
+    var rejectedType: String?
+    func currentDefaultApplicationBundleID(toOpen contentType: UTType) -> String? { current[contentType.identifier] }
+    func currentDefaultApplicationURL(toOpen contentType: UTType) -> URL? {
+        current[contentType.identifier].flatMap(applicationURL(withBundleIdentifier:))
+    }
+    func applicationURL(withBundleIdentifier bundleIdentifier: String) -> URL? {
+        URL(fileURLWithPath: "/Applications/\(bundleIdentifier).app")
+    }
+    func setDefaultApplication(_ appURL: URL, toOpen contentType: UTType, completion: @escaping (Error?) -> Void) {
+        calls.append(contentType.identifier)
+        if rejectedType != contentType.identifier {
+            current[contentType.identifier] = appURL.deletingPathExtension().lastPathComponent
+        }
+        completion(nil)
+    }
 }

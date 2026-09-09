@@ -2,7 +2,7 @@ import Foundation
 
 /// schemaVersion 迁移与配置校验。
 public enum ConfigurationMigration {
-    public static let currentVersion = 1
+    public static let currentVersion = 2
 
     public enum MigrationError: Error, Equatable {
         case unsupportedVersion(Int)
@@ -13,6 +13,9 @@ public enum ConfigurationMigration {
     public static func configuration(from data: Data) throws -> Configuration {
         let version = schemaVersion(in: data)
         switch version {
+        case 1:
+            let legacy = try JSONDecoder().decode(Configuration.self, from: data)
+            return Configuration(schemaVersion: currentVersion, handlers: legacy.handlers)
         case currentVersion:
             return try JSONDecoder().decode(Configuration.self, from: data)
         default:
@@ -36,7 +39,8 @@ public enum ConfigurationSanitizer {
     public static func sanitized(_ config: Configuration) -> Configuration {
         var result = config
         result.handlers = config.handlers.compactMap { handler -> FileHandler? in
-            guard !handler.contentTypeIdentifier.isEmpty, !handler.fallbackApplication.bundleIdentifier.isEmpty else {
+            guard !handler.contentTypeIdentifier.isEmpty,
+                  handler.groupName != nil || !handler.fallbackApplication.bundleIdentifier.isEmpty else {
                 return nil
             }
             var safe = handler

@@ -178,14 +178,8 @@ final class SettingsWindowController: NSWindowController {
     private let contentController: SettingsWorkspaceViewController
     private var didBuildContent = false
 
-    init(
-        model: SettingsModel,
-        recentErrorsProvider: @escaping () -> [String]
-    ) {
-        contentController = SettingsWorkspaceViewController(
-            model: model,
-            recentErrorsProvider: recentErrorsProvider
-        )
+    init(model: SettingsModel) {
+        contentController = SettingsWorkspaceViewController(model: model)
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 960, height: 680),
@@ -219,17 +213,16 @@ final class SettingsWindowController: NSWindowController {
     }
 }
 
-/// 单窗口主从界面：左侧选择文件类型，右侧完成启用、规则、其他位置和试测。
+/// 单窗口主从界面：左侧选择文件类型，右侧完成启用、规则和其他位置。
 @MainActor
 private final class SettingsWorkspaceViewController: NSViewController,
     NSTableViewDataSource,
     NSTableViewDelegate
 {
     private let model: SettingsModel
-    private let recentErrorsProvider: () -> [String]
 
     private let sidebar = NSVisualEffectView()
-    private let sidebarTitle = NSTextField(labelWithString: "管理的文件类型")
+    private let sidebarTitle = NSTextField(labelWithString: "文件类型与格式组")
     private let handlerTable = NSTableView()
     private let handlerScroll = NSScrollView()
     private let addTypeButton = NSButton(title: "添加文件类型…", target: nil, action: nil)
@@ -253,7 +246,6 @@ private final class SettingsWorkspaceViewController: NSViewController,
     private let statusDot = NSTextField(labelWithString: "●")
     private let statusLabel = NSTextField(labelWithString: "")
     private let enableButton = NSButton(title: "", target: nil, action: nil)
-    private let diagnosticsButton = NSButton(title: "帮助与诊断…", target: nil, action: nil)
 
     private let rulesTitle = NSTextField(labelWithString: "按文件所在位置选择应用")
     private let rulesExplanation = NSTextField(labelWithString: "如果一个文件同时符合多条规则，将优先使用排在上面的规则。")
@@ -267,19 +259,16 @@ private final class SettingsWorkspaceViewController: NSViewController,
     private let fallbackApplication = NSTextField(labelWithString: "")
     private let changeFallbackButton = NSButton(title: "更改…", target: nil, action: nil)
 
-    private let testButton = NSButton(title: "选择文件，预览打开结果…", target: nil, action: nil)
-    private let resultLabel = NSTextField(wrappingLabelWithString: "")
+    private let feedbackLabel = NSTextField(wrappingLabelWithString: "")
 
     private var selectedHandlerID: UUID?
-    private var diagnosticsWindowController: NSWindowController?
 
     private var currentHandler: FileHandler? {
         selectedHandlerID.flatMap { model.handler(id: $0) }
     }
 
-    init(model: SettingsModel, recentErrorsProvider: @escaping () -> [String]) {
+    init(model: SettingsModel) {
         self.model = model
-        self.recentErrorsProvider = recentErrorsProvider
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -378,12 +367,8 @@ private final class SettingsWorkspaceViewController: NSViewController,
 
         SettingsStyle.button(addTypeButton, symbol: "plus")
         addTypeButton.target = self
-        addTypeButton.action = #selector(chooseExampleFile(_:))
-        SettingsStyle.button(diagnosticsButton, symbol: "questionmark.circle")
-        diagnosticsButton.isBordered = false
-        diagnosticsButton.target = self
-        diagnosticsButton.action = #selector(showDiagnostics(_:))
-        let footer = SettingsStyle.column([addTypeButton, diagnosticsButton], spacing: 8)
+        addTypeButton.action = #selector(showAddFileType(_:))
+        let footer = SettingsStyle.column([addTypeButton], spacing: 8)
         for child in [sidebarTitle, handlerScroll, footer] {
             child.translatesAutoresizingMaskIntoConstraints = false
             sidebar.addSubview(child)
@@ -410,17 +395,17 @@ private final class SettingsWorkspaceViewController: NSViewController,
         title.font = .systemFont(ofSize: 24, weight: .semibold)
         title.alignment = .center
 
-        let explanation = NSTextField(wrappingLabelWithString: "选择一个示例文件。OpenBy 会识别它的类型，然后你可以按文件所在位置设置打开应用。")
+        let explanation = NSTextField(wrappingLabelWithString: "选择预设、输入后缀或选择示例文件来创建格式组，为组内格式统一设置打开应用。")
         explanation.textColor = .secondaryLabelColor
         explanation.alignment = .center
         explanation.maximumNumberOfLines = 3
 
-        let steps = NSTextField(wrappingLabelWithString: "选择文件  →  设置规则  →  启用自动打开")
+        let steps = NSTextField(wrappingLabelWithString: "添加类型  →  设置规则  →  启用自动打开")
         steps.font = .systemFont(ofSize: 13, weight: .medium)
         steps.textColor = .secondaryLabelColor
         steps.maximumNumberOfLines = 3
 
-        let chooseButton = NSButton(title: "选择示例文件…", target: self, action: #selector(chooseExampleFile(_:)))
+        let chooseButton = NSButton(title: "添加文件类型…", target: self, action: #selector(showAddFileType(_:)))
         chooseButton.bezelStyle = .rounded
         chooseButton.keyEquivalent = "\r"
 
@@ -555,21 +540,11 @@ private final class SettingsWorkspaceViewController: NSViewController,
         let fallbackRow = SettingsStyle.row([fallbackIcon, fallbackText, SettingsStyle.spacer(), changeFallbackButton], spacing: 12)
         let fallback = SettingsStyle.column([fallbackTitle, SettingsStyle.group(fallbackRow)], spacing: 10)
 
-        let previewTitle = SettingsStyle.label("预览打开结果", size: 14, weight: .semibold)
-        let previewHint = SettingsStyle.label("仅预览，不会打开文件", size: 11, color: .secondaryLabelColor)
-        testButton.title = "选择文件…"
-        SettingsStyle.button(testButton, symbol: "play")
-        testButton.target = self
-        testButton.action = #selector(testFile(_:))
-        resultLabel.font = .systemFont(ofSize: 12)
-        resultLabel.maximumNumberOfLines = 0
-        resultLabel.isSelectable = true
-        resultLabel.setContentCompressionResistancePriority(.required, for: .vertical)
-        let previewHeader = SettingsStyle.row([SettingsStyle.column([previewTitle, previewHint], spacing: 4), SettingsStyle.spacer(), testButton])
-        let preview = SettingsStyle.column([previewHeader, resultLabel], spacing: 12)
-        let divider = NSBox()
-        divider.boxType = .separator
-        let content = SettingsStyle.column([header, status, rules, fallback, divider, preview], spacing: 24)
+        feedbackLabel.font = .systemFont(ofSize: 12)
+        feedbackLabel.maximumNumberOfLines = 0
+        feedbackLabel.isSelectable = true
+        feedbackLabel.setContentCompressionResistancePriority(.required, for: .vertical)
+        let content = SettingsStyle.column([header, status, rules, fallback, feedbackLabel], spacing: 24)
         content.setCustomSpacing(8, after: header)
         content.translatesAutoresizingMaskIntoConstraints = false
         detailView.addSubview(content)
@@ -604,7 +579,7 @@ private final class SettingsWorkspaceViewController: NSViewController,
         statusLabel.stringValue = health.text
 
         let managed = isManaged(handler)
-        enableButton.title = associationBusy ? "正在更新…" : "启用自动打开"
+        enableButton.title = associationBusy ? "正在更新…" : (model.managedCount(handler) > 0 && !managed ? "启用剩余格式" : "启用自动打开")
         enableButton.isHidden = managed && !associationBusy
         enableButton.isEnabled = !associationBusy
         enableButton.bezelColor = .controlAccentColor
@@ -612,7 +587,7 @@ private final class SettingsWorkspaceViewController: NSViewController,
         moreButton.isEnabled = !associationBusy
         handlerTable.isEnabled = !associationBusy
         addTypeButton.isEnabled = !associationBusy
-        rebuildTypeMenu(managed: managed)
+        rebuildTypeMenu(managed: model.managedCount(handler) > 0)
         enableButton.toolTip = managed
             ? "让 macOS 恢复使用 OpenBy 启用前的默认应用"
             : "让 OpenBy 成为这种文件的默认打开应用"
@@ -633,16 +608,16 @@ private final class SettingsWorkspaceViewController: NSViewController,
             statusDot.textColor = .secondaryLabelColor
         }
         if let message {
-            resultLabel.stringValue = message
-            resultLabel.textColor = isError ? .systemRed : .labelColor
+            feedbackLabel.stringValue = message
+            feedbackLabel.textColor = isError ? .systemRed : .labelColor
         } else if handler.rules.isEmpty {
-            resultLabel.stringValue = "下一步：添加位置规则，或直接启用并让所有其他位置使用 \(fallbackApplication.stringValue) 打开。"
-            resultLabel.textColor = .secondaryLabelColor
+            feedbackLabel.stringValue = "下一步：添加位置规则，或直接启用并让所有其他位置使用 \(fallbackApplication.stringValue) 打开。"
+            feedbackLabel.textColor = .secondaryLabelColor
         } else {
-            resultLabel.stringValue = ""
-            resultLabel.textColor = .secondaryLabelColor
+            feedbackLabel.stringValue = ""
+            feedbackLabel.textColor = .secondaryLabelColor
         }
-        resultLabel.isHidden = resultLabel.stringValue.isEmpty
+        feedbackLabel.isHidden = feedbackLabel.stringValue.isEmpty
     }
 
     private func isManaged(_ handler: FileHandler) -> Bool {
@@ -651,6 +626,10 @@ private final class SettingsWorkspaceViewController: NSViewController,
     }
 
     private func healthState(for handler: FileHandler) -> (text: String, color: NSColor) {
+        let count = model.managedCount(handler)
+        if count > 0 && count < handler.contentTypes.count {
+            return ("部分启用 · \(count)/\(handler.contentTypes.count) 种格式", .systemOrange)
+        }
         let missingFolder = handler.rules.contains {
             $0.enabled && !FileManager.default.fileExists(atPath: PathInput.expandedAbsolutePath($0.folderPath))
         }
@@ -672,6 +651,98 @@ private final class SettingsWorkspaceViewController: NSViewController,
 
     // MARK: - 文件类型
 
+    @objc private func showAddFileType(_ sender: Any?) {
+        presentFormatGroupEditor(existing: nil)
+    }
+
+    @objc private func editFormatGroup(_ sender: Any?) {
+        guard let handler = currentHandler else { return }
+        presentFormatGroupEditor(existing: handler)
+    }
+
+    private func presentFormatGroupEditor(existing: FileHandler?) {
+        guard !associationBusy else { return }
+        let draft = FormatGroupDraft(existing: existing)
+        let alert = NSAlert()
+        alert.messageText = existing == nil ? "添加文件类型或格式组" : "编辑格式组"
+        alert.informativeText = "选择预设后可以删改下方后缀，例如删除 png 或加入 avif。组内格式共用打开应用和位置规则。"
+        alert.addButton(withTitle: existing == nil ? "添加" : "保存")
+        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: "添加示例文件…")
+        alert.accessoryView = draft.view
+        alert.window.initialFirstResponder = draft.extensionsField
+
+        while true {
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                guard let extensions = FormatGroups.parseExtensions(draft.extensionsField.stringValue) else {
+                    alert.informativeText = "请填写至少一个有效后缀，用逗号或空格分隔，例如 jpg, png。不要输入文件名或路径。"
+                    continue
+                }
+                let invalid = extensions.filter { UTType(filenameExtension: $0) == nil }
+                guard invalid.isEmpty else {
+                    alert.informativeText = "无法识别这些后缀：\(invalid.joined(separator: ", "))。请修改后再保存。"
+                    continue
+                }
+                if let conflict = model.conflictingHandler(extensions: extensions, excluding: existing?.id) {
+                    alert.informativeText = "部分格式已属于“\(typeDisplayName(conflict))”。请从当前列表去除重复格式，或先编辑已有组；原有规则不会被覆盖。"
+                    continue
+                }
+                let inputName = draft.nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                let name = inputName.isEmpty ? (extensions.count == 1 ? ".\(extensions[0].uppercased()) 文件" : "自定义格式组") : inputName
+                let commit = { [weak self] in
+                    guard let self else { return }
+                    do {
+                        let group = try self.model.saveGroup(name: name, extensions: extensions, editing: existing?.id)
+                        self.selectedHandlerID = group.id
+                        self.reload(message: "已保存“\(name)”（\(extensions.count) 个后缀）。整组共用位置规则和“其他位置”应用；新增格式需启用自动打开。")
+                    } catch {
+                        self.reload(message: "保存失败：\(error.localizedDescription)", isError: true)
+                    }
+                }
+                if let existing {
+                    let retained = Set(extensions.compactMap { UTType(filenameExtension: $0)?.identifier })
+                    let removed = existing.contentTypes.filter { !retained.contains($0.identifier) }
+                    if !removed.isEmpty {
+                        associationBusy = true
+                        renderDetail(message: nil, isError: false)
+                        model.restoreTypes(handler: existing, types: removed) { [weak self] result in
+                            Task { @MainActor in
+                                guard let self else { return }
+                                self.associationBusy = false
+                                switch result {
+                                case .success(true): commit()
+                                case .success(false):
+                                    self.reload(message: "未修改格式组：部分移除格式无法恢复原应用。请先停用自动打开后重试。", isError: true)
+                                case .failure(let error):
+                                    self.reload(message: "未修改格式组：\(error.localizedDescription)", isError: true)
+                                }
+                            }
+                        }
+                        return
+                    }
+                }
+                commit()
+                return
+            case .alertThirdButtonReturn:
+                let panel = NSOpenPanel()
+                panel.canChooseFiles = true
+                panel.canChooseDirectories = false
+                panel.allowsMultipleSelection = true
+                panel.message = "选择示例文件，将它们的后缀加入当前格式组"
+                guard panel.runModal() == .OK else { continue }
+                let extensions = panel.urls.map(\.pathExtension).filter { !$0.isEmpty }
+                if extensions.isEmpty {
+                    alert.informativeText = "所选文件没有后缀，请选择其他文件或手动输入。"
+                } else {
+                    let current = draft.extensionsField.stringValue
+                    draft.extensionsField.stringValue = ([current] + extensions).filter { !$0.isEmpty }.joined(separator: ", ")
+                }
+            default: return
+            }
+        }
+    }
+
     @objc private func chooseExampleFile(_ sender: Any?) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
@@ -691,24 +762,32 @@ private final class SettingsWorkspaceViewController: NSViewController,
             NSSound.beep()
             return
         }
+        addFileType(extension: ext)
+    }
+
+    @discardableResult
+    private func addFileType(extension ext: String) -> Bool {
+        guard !associationBusy else { return false }
         guard let handler = model.addHandler(extension: ext) else {
-            if let existing = model.configuration.handlers.first(where: { $0.displayExtensions.contains(ext) }) {
+            if let existing = model.conflictingHandler(extensions: [ext]) {
                 selectedHandlerID = existing.id
                 reload(message: ".\(ext) 文件已经在左侧列表中。")
+                return true
             } else {
                 reload(message: "macOS 无法识别 .\(ext) 文件类型。", isError: true)
             }
-            return
+            return false
         }
         selectedHandlerID = handler.id
         reload(message: "已添加 .\(ext) 文件。下一步可以添加位置规则，再启用自动打开。")
+        return true
     }
 
     @objc private func toggleManaged(_ sender: Any?) {
         guard !associationBusy, let handler = currentHandler,
               let type = UTType(handler.contentTypeIdentifier) else { return }
 
-        if isManaged(handler) {
+        if isManaged(handler) || (sender as? NSMenuItem)?.action == #selector(stopGroup(_:)) {
             associationBusy = true
             renderDetail(message: nil, isError: false)
             model.restoreDefault(handlerID: handler.id, contentType: type) { [weak self] result in
@@ -738,9 +817,9 @@ private final class SettingsWorkspaceViewController: NSViewController,
                     self.associationBusy = false
                     switch result {
                     case .success(true):
-                        self.reload(message: "\(handler.displayExtensions.first.map { "." + $0 } ?? "这种") 文件的自动打开已启用。")
+                        self.reload(message: "“\(self.typeDisplayName(handler))”的自动打开已全部启用。")
                     case .success(false):
-                        self.reload(message: "尚未获得 macOS 允许。请在系统弹窗中选择“允许”，然后重试。", isError: true)
+                        self.reload(message: "尚未全部启用。请在 macOS 弹窗中允许后重试；已启用的格式会保留。", isError: true)
                     case .failure(let error):
                         self.reload(message: "启用失败：\(error.localizedDescription)", isError: true)
                     }
@@ -749,17 +828,21 @@ private final class SettingsWorkspaceViewController: NSViewController,
         }
     }
 
+    @objc private func stopGroup(_ sender: Any?) {
+        toggleManaged(sender)
+    }
+
     @objc private func removeFileType(_ sender: Any?) {
         guard !associationBusy, let handler = currentHandler else { return }
-        let ext = handler.displayExtensions.first.map { "." + $0 } ?? "这种"
-        let managed = isManaged(handler)
+        let ext = typeDisplayName(handler)
+        let managed = model.managedCount(handler) > 0
 
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "移除 \(ext) 文件？"
+        alert.messageText = "移除“\(ext)”？"
         alert.informativeText = managed
             ? "OpenBy 会先恢复原来的默认应用，再删除这里的位置规则。"
-            : "这会删除该文件类型的所有位置规则，不会更改 macOS 当前的默认应用。"
+            : "这会删除该格式组的所有位置规则，不会更改 macOS 当前的默认应用。"
         alert.addButton(withTitle: managed ? "恢复并移除" : "移除")
         alert.addButton(withTitle: "取消")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -871,35 +954,6 @@ private final class SettingsWorkspaceViewController: NSViewController,
         reload(message: "其他位置现在会使用 \(reference.displayName) 打开。")
     }
 
-    @objc private func testFile(_ sender: Any?) {
-        guard let handler = currentHandler else { return }
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        if let type = UTType(handler.contentTypeIdentifier) {
-            panel.allowedContentTypes = [type]
-        }
-        panel.message = "选择一个文件，OpenBy 只预览结果，不会真正打开它"
-        panel.prompt = "预览结果"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        resultLabel.isHidden = false
-        resultLabel.stringValue = friendlyRoutingDescription(for: url)
-        resultLabel.textColor = .labelColor
-    }
-
-    private func friendlyRoutingDescription(for url: URL) -> String {
-        guard let handler = currentHandler else { return "没有可用的文件类型。" }
-        let suffix = isManaged(handler) ? "" : "\n配置预览 · 自动打开尚未启用"
-        if let index = handler.rules.firstIndex(where: {
-            $0.enabled && PathMatcher.isFile(url, insideFolder: $0.folderPath, includesDescendants: $0.includesDescendants)
-        }) {
-            let rule = handler.rules[index]
-            return "\(url.lastPathComponent) → \(rule.targetApplication.displayName)\n命中第 \(index + 1) 条规则 · \(folderDisplayName(rule.folderPath))（\(rule.includesDescendants ? "包含子文件夹" : "仅当前文件夹")）" + suffix
-        }
-        return "\(url.lastPathComponent) → \(handler.fallbackApplication.displayName)\n没有匹配规则，使用其他位置的应用。" + suffix
-    }
-
     private func chooseApplication(message: String) -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
@@ -923,34 +977,6 @@ private final class SettingsWorkspaceViewController: NSViewController,
         return name.isEmpty ? expanded : name
     }
 
-    // MARK: - 诊断
-
-    @objc private func showDiagnostics(_ sender: Any?) {
-        if let existing = diagnosticsWindowController {
-            existing.showWindow(nil)
-            existing.window?.makeKeyAndOrderFront(nil)
-            return
-        }
-        let controller = DiagnosticsViewController(
-            model: model,
-            recentErrorsProvider: recentErrorsProvider
-        )
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 780, height: 620),
-            styleMask: [.titled, .closable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "帮助与诊断"
-        window.contentViewController = controller
-        window.minSize = NSSize(width: 700, height: 560)
-        window.setContentSize(NSSize(width: 780, height: 620))
-        window.center()
-        let windowController = NSWindowController(window: window)
-        diagnosticsWindowController = windowController
-        windowController.showWindow(nil)
-    }
-
     // MARK: - Table data source / delegate
 
     func numberOfRows(in tableView: NSTableView) -> Int {
@@ -959,6 +985,7 @@ private final class SettingsWorkspaceViewController: NSViewController,
     }
 
     private func typeDisplayName(_ handler: FileHandler) -> String {
+        if let name = handler.groupName { return name }
         switch handler.displayExtensions.first?.lowercased() {
         case "pdf": return "PDF 文档"
         case "md", "markdown": return "Markdown"
@@ -985,13 +1012,17 @@ private final class SettingsWorkspaceViewController: NSViewController,
         let title = NSMenuItem(title: "更多", action: nil, keyEquivalent: "")
         title.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "更多")
         menu.addItem(title)
+        let edit = NSMenuItem(title: "编辑格式组…", action: #selector(editFormatGroup(_:)), keyEquivalent: "")
+        edit.target = self
+        menu.addItem(edit)
+        menu.addItem(.separator())
         if managed {
-            let stop = NSMenuItem(title: "停用并恢复原应用…", action: #selector(toggleManaged(_:)), keyEquivalent: "")
+            let stop = NSMenuItem(title: "停用并恢复原应用…", action: #selector(stopGroup(_:)), keyEquivalent: "")
             stop.target = self
             menu.addItem(stop)
             menu.addItem(.separator())
         }
-        let remove = NSMenuItem(title: "移除文件类型…", action: #selector(removeFileType(_:)), keyEquivalent: "")
+        let remove = NSMenuItem(title: "移除格式组…", action: #selector(removeFileType(_:)), keyEquivalent: "")
         remove.target = self
         menu.addItem(remove)
         moreButton.menu = menu
@@ -1005,7 +1036,7 @@ private final class SettingsWorkspaceViewController: NSViewController,
             let cell = tableView.makeView(withIdentifier: identifier, owner: nil) as? SettingsTypeCell ?? SettingsTypeCell()
             cell.identifier = identifier
             cell.name.stringValue = typeDisplayName(handler)
-            cell.subtitle.stringValue = "\(handler.rules.count) 条规则 · \(isManaged(handler) ? "已启用" : "尚未启用")"
+            cell.subtitle.stringValue = "\(handler.displayExtensions.count) 个后缀 · \(model.managedCount(handler) == 0 ? "尚未启用" : (isManaged(handler) ? "已启用" : "部分启用"))"
             cell.icon.image = UTType(handler.contentTypeIdentifier).map { NSWorkspace.shared.icon(for: $0) }
             cell.toolTip = cell.name.stringValue + " · " + cell.subtitle.stringValue
             return cell
@@ -1306,5 +1337,55 @@ private final class RuleEditorSession: NSObject {
             return
         }
         previewLabel.stringValue = "“\(folder)”中的文件将使用 \(app) 打开（\(scope)）。"
+    }
+}
+
+
+/// 编辑草稿不触碰配置；预设只是填充名称与可修改的后缀列表。
+@MainActor
+private final class FormatGroupDraft: NSObject {
+    let view = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 240))
+    let nameField = NSTextField()
+    let extensionsField = NSTextField()
+    private let preset = NSPopUpButton(frame: .zero, pullsDown: false)
+
+    init(existing: FileHandler?) {
+        super.init()
+        preset.addItem(withTitle: "自定义")
+        preset.addItems(withTitles: FormatGroups.presets.map(\.name))
+        preset.target = self
+        preset.action = #selector(selectPreset(_:))
+        nameField.placeholderString = "组名（可选），例如：工作图片"
+        nameField.stringValue = existing?.groupName ?? ""
+        nameField.setAccessibilityLabel("格式组名称")
+        extensionsField.placeholderString = "例如：jpg, png, webp"
+        extensionsField.stringValue = existing?.displayExtensions.joined(separator: ", ") ?? ""
+        extensionsField.setAccessibilityLabel("组内文件后缀，可增删")
+        extensionsField.cell?.wraps = true
+        extensionsField.cell?.isScrollable = false
+        extensionsField.usesSingleLineMode = false
+        let hint = SettingsStyle.label("用逗号或空格分隔；删除后缀即可将它排除。", size: 11, color: .secondaryLabelColor)
+        let stack = SettingsStyle.column([
+            SettingsStyle.label("预设"), preset,
+            SettingsStyle.label("组名"), nameField,
+            SettingsStyle.label("组内后缀（可编辑）"), extensionsField, hint,
+        ], spacing: 6)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: view.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            extensionsField.heightAnchor.constraint(equalToConstant: 64),
+        ])
+    }
+
+    @objc private func selectPreset(_ sender: Any?) {
+        let index = preset.indexOfSelectedItem - 1
+        guard FormatGroups.presets.indices.contains(index) else { return }
+        let selected = FormatGroups.presets[index]
+        nameField.stringValue = selected.name
+        extensionsField.stringValue = selected.extensions.joined(separator: ", ")
     }
 }
