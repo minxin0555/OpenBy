@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import UniformTypeIdentifiers
 
 /// Shared native presentation primitives. Colors follow the window's effective appearance.
@@ -103,10 +104,127 @@ final class SettingsFlippedView: NSView {
 }
 
 @MainActor
+private final class SettingsTypeTable: NSTableView {
+    private func refreshRows() {
+        enumerateAvailableRowViews { row, _ in row.needsDisplay = true }
+    }
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        refreshRows()
+        return result
+    }
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder()
+        refreshRows()
+        return result
+    }
+}
+
+@MainActor
+private final class SettingsTypeRow: NSTableRowView {
+    private var hover = false
+    private var tracking: NSTrackingArea?
+    private var transition: Timer?
+    private var backgroundAlpha: CGFloat = 0
+    override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
+    override var isSelected: Bool { didSet { refresh() } }
+    override var isEmphasized: Bool { didSet { needsDisplay = true } }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: NSWindow.didBecomeKeyNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: NSWindow.didResignKeyNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: NSColor.systemColorsDidChangeNotification, object: nil)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) 未实现") }
+    deinit { NotificationCenter.default.removeObserver(self); transition?.invalidate() }
+    @objc private func refresh() {
+        transition?.invalidate()
+        let active = window?.isKeyWindow == true
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let target: CGFloat = isSelected
+            ? (active ? (dark ? 0.24 : 0.12) : (dark ? 0.13 : 0.07))
+            : (hover && active ? 0.05 : 0)
+        let initial = backgroundAlpha
+        let started = CACurrentMediaTime()
+        needsDisplay = true
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            backgroundAlpha = target
+            return
+        }
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self else { timer.invalidate(); return }
+                let progress = min(1, (CACurrentMediaTime() - started) / 0.12)
+                self.backgroundAlpha = initial + (target - initial) * progress
+                self.needsDisplay = true
+                if progress >= 1 { timer.invalidate() }
+            }
+        }
+        transition = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        refresh()
+    }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refresh()
+    }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        tracking = area
+        hover = window.map { bounds.contains(convert($0.mouseLocationOutsideOfEventStream, from: nil)) } ?? false
+        refresh()
+    }
+    override func mouseEntered(with event: NSEvent) { hover = true; refresh() }
+    override func mouseExited(with event: NSEvent) { hover = false; refresh() }
+    override func drawSelection(in dirtyRect: NSRect) {}
+    override func drawBackground(in dirtyRect: NSRect) {}
+    override func draw(_ dirtyRect: NSRect) {
+        let active = window?.isKeyWindow == true
+        let accent = NSColor.controlAccentColor
+        let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 2.5, dy: 2.5), xRadius: 8, yRadius: 8)
+        (isSelected ? accent : NSColor.labelColor).withAlphaComponent(backgroundAlpha).setFill()
+        outline.fill()
+        if isSelected {
+            accent.withAlphaComponent(active ? 1 : 0.5).setFill()
+            NSBezierPath(roundedRect: NSRect(x: 6, y: bounds.midY - 9, width: 3, height: 18), xRadius: 1.5, yRadius: 1.5).fill()
+            if (active && window?.firstResponder === superview) || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast {
+                accent.withAlphaComponent(0.8).setStroke()
+                outline.lineWidth = 1
+                outline.stroke()
+            }
+        }
+        for case let cell as SettingsTypeCell in subviews {
+            cell.name.font = .systemFont(ofSize: 13, weight: isSelected ? .semibold : .medium)
+        }
+    }
+}
+
+@MainActor
 private final class SettingsTypeCell: NSTableCellView {
     let name = SettingsStyle.label("", weight: .medium)
     let subtitle = SettingsStyle.label("", size: 11, color: .secondaryLabelColor)
     let icon = NSImageView()
+
+    func setStatus(count: Int, managed: Int, fullyManaged: Bool) {
+        let state = managed == 0 ? "尚未启用" : (fullyManaged ? "已启用" : "部分启用")
+        let color = NSColor(name: nil) { appearance in
+            let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            if managed == 0 { return dark ? .systemRed : NSColor(srgbRed: 0.72, green: 0.16, blue: 0.18, alpha: 1) }
+            if fullyManaged { return dark ? .systemGreen : NSColor(srgbRed: 0.13, green: 0.43, blue: 0.23, alpha: 1) }
+            return dark ? .systemOrange : NSColor(srgbRed: 0.62, green: 0.32, blue: 0.02, alpha: 1)
+        }
+        let text = NSMutableAttributedString(string: "\(count) 个后缀  ", attributes: [.foregroundColor: NSColor.secondaryLabelColor])
+        text.append(NSAttributedString(string: "● \(state)", attributes: [.foregroundColor: color]))
+        subtitle.attributedStringValue = text
+        setAccessibilityLabel("\(name.stringValue)，\(count) 个后缀，\(state)")
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -119,7 +237,7 @@ private final class SettingsTypeCell: NSTableCellView {
         row.translatesAutoresizingMaskIntoConstraints = false
         addSubview(row)
         NSLayoutConstraint.activate([
-            row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
             row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             row.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
@@ -284,7 +402,7 @@ private final class SettingsWorkspaceViewController: NSViewController,
 
     private let sidebar = NSView()
     private let sidebarTitle = NSTextField(labelWithString: "文件类型")
-    private let handlerTable = NSTableView()
+    private let handlerTable = SettingsTypeTable()
     private let handlerScroll = NSScrollView()
     private let addTypeButton = NSButton(title: "添加文件类型…", target: nil, action: nil)
 
@@ -412,6 +530,7 @@ private final class SettingsWorkspaceViewController: NSViewController,
         handlerTable.addTableColumn(column)
         handlerTable.headerView = nil
         handlerTable.style = .plain
+        handlerTable.focusRingType = .none
         handlerTable.rowHeight = 56
         handlerTable.intercellSpacing = NSSize(width: 0, height: 4)
         handlerTable.backgroundColor = .clear
@@ -1078,6 +1197,10 @@ private final class SettingsWorkspaceViewController: NSViewController,
         return icon
     }
 
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        tableView === handlerTable ? SettingsTypeRow() : nil
+    }
+
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         if tableView === handlerTable {
             guard row < model.configuration.handlers.count else { return nil }
@@ -1086,7 +1209,7 @@ private final class SettingsWorkspaceViewController: NSViewController,
             let cell = tableView.makeView(withIdentifier: identifier, owner: nil) as? SettingsTypeCell ?? SettingsTypeCell()
             cell.identifier = identifier
             cell.name.stringValue = typeDisplayName(handler)
-            cell.subtitle.stringValue = "\(handler.displayExtensions.count) 个后缀 · \(model.managedCount(handler) == 0 ? "尚未启用" : (isManaged(handler) ? "已启用" : "部分启用"))"
+            cell.setStatus(count: handler.displayExtensions.count, managed: model.managedCount(handler), fullyManaged: isManaged(handler))
             cell.icon.image = UTType(handler.contentTypeIdentifier).map { NSWorkspace.shared.icon(for: $0) }
             cell.toolTip = cell.name.stringValue + " · " + cell.subtitle.stringValue
             return cell

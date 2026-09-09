@@ -5,19 +5,19 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUTPUT_APP="$ROOT/dist/OpenBy.app"
-BUILD_ARCH=()
+BUILD_ARGS=(-c release)
 REGISTER=true
 for option in "$@"; do
   case "$option" in
-    --universal) BUILD_ARCH=(--arch arm64 --arch x86_64) ;;
+    --universal) BUILD_ARGS+=(--arch arm64 --arch x86_64) ;;
     --no-register) REGISTER=false ;;
     *) echo "未知选项: $option" >&2; exit 2 ;;
   esac
 done
 
 echo "==> 1/5 swift build -c release"
-swift build --package-path "$ROOT" -c release "${BUILD_ARCH[@]}"
-BIN_PATH="$(swift build --package-path "$ROOT" -c release "${BUILD_ARCH[@]}" --show-bin-path)"
+swift build --package-path "$ROOT" "${BUILD_ARGS[@]}"
+BIN_PATH="$(swift build --package-path "$ROOT" "${BUILD_ARGS[@]}" --show-bin-path)"
 
 STAGING_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/OpenBy-build.XXXXXX")"
 trap 'rm -rf "$STAGING_ROOT"' EXIT
