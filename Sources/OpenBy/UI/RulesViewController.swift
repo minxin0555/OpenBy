@@ -10,10 +10,10 @@ final class RulesViewController: NSViewController, NSTableViewDataSource, NSTabl
     private let headerLabel = NSTextField(labelWithString: "")
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
-    private let addButton = NSButton(title: "添加规则…", target: nil, action: nil)
-    private let editButton = NSButton(title: "编辑…", target: nil, action: nil)
-    private let deleteButton = NSButton(title: "删除规则", target: nil, action: nil)
-    private let fallbackButton = NSButton(title: "更换默认应用…", target: nil, action: nil)
+    private let addButton = SettingsButton(title: "添加规则", target: nil, action: nil)
+    private let editButton = SettingsButton(title: "编辑", target: nil, action: nil)
+    private let deleteButton = SettingsButton(title: "删除规则", target: nil, action: nil)
+    private let fallbackButton = SettingsButton(title: "更换默认应用", target: nil, action: nil)
     private let tipLabel = NSTextField(labelWithString: "规则从上到下匹配，第一条命中即生效。拖拽行可调整顺序。")
 
     private var handlerID: UUID?
@@ -257,7 +257,7 @@ final class RulesViewController: NSViewController, NSTableViewDataSource, NSTabl
         targetLabel.lineBreakMode = .byTruncatingTail
         targetLabel.widthAnchor.constraint(equalToConstant: 320).isActive = true
 
-        let chooseButton = NSButton(title: "选择应用…", target: nil, action: nil)
+        let chooseButton = SettingsButton(title: "选择应用", target: nil, action: nil)
 
         let stack = NSStackView(views: [folderField, descendantsButton, enabledButton, targetLabel, chooseButton])
         stack.orientation = .vertical

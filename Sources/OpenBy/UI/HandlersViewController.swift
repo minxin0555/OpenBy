@@ -8,10 +8,10 @@ final class HandlersViewController: NSViewController, NSTableViewDataSource, NST
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
     private let extensionField = NSTextField(string: "")
-    private let addButton = NSButton(title: "添加扩展名", target: nil, action: nil)
-    private let takeOverButton = NSButton(title: "设为默认", target: nil, action: nil)
-    private let stopButton = NSButton(title: "停止接管", target: nil, action: nil)
-    private let deleteButton = NSButton(title: "删除", target: nil, action: nil)
+    private let addButton = SettingsButton(title: "添加扩展名", target: nil, action: nil)
+    private let takeOverButton = SettingsButton(title: "设为默认", target: nil, action: nil)
+    private let stopButton = SettingsButton(title: "停止接管", target: nil, action: nil)
+    private let deleteButton = SettingsButton(title: "删除", target: nil, action: nil)
     private let statusLabel = NSTextField(labelWithString: "")
 
     private var selectedHandler: FileHandler? {

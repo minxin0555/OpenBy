@@ -85,6 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     private func installMenu() {
+        installApplicationMenu()
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         let menuIcon = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "pdf")
             .flatMap { NSImage(contentsOf: $0) }
@@ -96,27 +97,108 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.button?.toolTip = "OpenBy · 后台自动打开"
         let menu = NSMenu()
         menu.delegate = self
-        let title = NSMenuItem(title: "OpenBy 正在后台运行", action: nil, keyEquivalent: "")
-        menu.addItem(title)
+        item.menu = menu
+        statusItem = item
+        rebuildStatusMenu(menu)
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === statusItem?.menu else { return }
+        rebuildStatusMenu(menu)
+        let status = SMAppService.mainApp.status
+        loginItem?.state = status == .enabled ? .on : (status == .requiresApproval ? .mixed : .off)
+        loginItem?.title = status == .requiresApproval ? "登录时启动（等待系统允许）…" : "登录时启动"
+    }
+
+    private func installApplicationMenu() {
+        let main = NSMenu()
+        func submenu(_ title: String) -> NSMenu {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            let menu = NSMenu(title: title)
+            item.submenu = menu
+            main.addItem(item)
+            return menu
+        }
+        func command(_ menu: NSMenu, _ title: String, _ action: Selector, _ key: String,
+                     target: AnyObject? = nil, modifiers: NSEvent.ModifierFlags = .command) {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            item.target = target
+            item.keyEquivalentModifierMask = modifiers
+            menu.addItem(item)
+        }
+        let application = submenu("OpenBy")
+        command(application, "关于 OpenBy", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), "", target: NSApp)
+        command(application, "设置…", #selector(openSettings), ",", target: self)
+        application.addItem(.separator())
+        command(application, "隐藏 OpenBy", #selector(NSApplication.hide(_:)), "h", target: NSApp)
+        command(application, "隐藏其他", #selector(NSApplication.hideOtherApplications(_:)), "h", target: NSApp, modifiers: [.command, .option])
+        command(application, "全部显示", #selector(NSApplication.unhideAllApplications(_:)), "", target: NSApp)
+        application.addItem(.separator())
+        command(application, "退出 OpenBy", #selector(quit), "q", target: self)
+        let file = submenu("文件")
+        command(file, "关闭窗口", #selector(NSWindow.performClose(_:)), "w")
+        let edit = submenu("编辑")
+        command(edit, "撤销", Selector(("undo:")), "z")
+        command(edit, "重做", Selector(("redo:")), "z", modifiers: [.command, .shift])
+        edit.addItem(.separator())
+        command(edit, "剪切", #selector(NSText.cut(_:)), "x")
+        command(edit, "复制", #selector(NSText.copy(_:)), "c")
+        command(edit, "粘贴", #selector(NSText.paste(_:)), "v")
+        command(edit, "全选", #selector(NSText.selectAll(_:)), "a")
+        let window = submenu("窗口")
+        command(window, "最小化", #selector(NSWindow.performMiniaturize(_:)), "m")
+        command(window, "缩放", #selector(NSWindow.performZoom(_:)), "")
+        command(window, "显示设置窗口", #selector(openSettings), "", target: self)
+        NSApp.windowsMenu = window
+        NSApp.mainMenu = main
+    }
+
+    private func rebuildStatusMenu(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let handlers = store?.snapshot().handlers ?? []
+        let font = NSFont.menuFont(ofSize: 0)
+        let nameWidth = handlers.map {
+            (SettingsModel.typeDisplayName($0) as NSString).size(withAttributes: [.font: font]).width
+        }.max() ?? 0
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.tabStops = [NSTextTab(textAlignment: .right, location: max(220, nameWidth + 90))]
+        if handlers.isEmpty {
+            menu.addItem(NSMenuItem(title: "尚无文件类型", action: nil, keyEquivalent: ""))
+        }
+        for handler in handlers {
+            let types = handler.contentTypes
+            let managed = types.filter {
+                associationService?.isManagedByOpenBy(contentType: $0, openByBundleID: Bundle.main.bundleIdentifier ?? "") == true
+            }.count
+            let enabled = handler.enabled && managed > 0
+            let status = enabled ? "已启用" : "已停用"
+            let name = SettingsModel.typeDisplayName(handler)
+            let entry = NSMenuItem(title: "\(name)\t\(status)", action: #selector(openHandlerSettings(_:)), keyEquivalent: "")
+            entry.target = self
+            entry.representedObject = handler.id
+            let title = NSMutableAttributedString(string: "\(name)\t", attributes: [
+                .font: font, .paragraphStyle: paragraph,
+            ])
+            title.append(NSAttributedString(string: status, attributes: [
+                .font: font, .paragraphStyle: paragraph,
+                .foregroundColor: enabled ? NSColor.systemGreen : NSColor.systemRed,
+            ]))
+            entry.attributedTitle = title
+            entry.toolTip = "\(name)：系统接管 \(managed)/\(types.count) 个类型。点击打开设置。"
+            menu.addItem(entry)
+        }
+        menu.addItem(.separator())
         let settings = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
         let login = NSMenuItem(title: "登录时启动", action: #selector(toggleLogin), keyEquivalent: "")
         login.target = self
-        menu.addItem(login)
         loginItem = login
+        menu.addItem(login)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "退出 OpenBy", action: #selector(quit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
-        item.menu = menu
-        statusItem = item
-    }
-
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        let status = SMAppService.mainApp.status
-        loginItem?.state = status == .enabled ? .on : (status == .requiresApproval ? .mixed : .off)
-        loginItem?.title = status == .requiresApproval ? "登录时启动（等待系统允许）…" : "登录时启动"
     }
 
     @objc private func toggleLogin() {
@@ -136,6 +218,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openSettings() { showSettingsWindow() }
+
+    @objc private func openHandlerSettings(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID, showSettingsWindow() else { return }
+        settingsController?.focus(handlerID: id)
+    }
 
     @objc private func quit() {
         if coordinator?.isBusy == true || !pendingRequests.isEmpty {

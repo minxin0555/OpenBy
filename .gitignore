@@ -3,13 +3,34 @@
 
 # xcodebuild -derivedDataPath .build-xcode 的本地构建产物
 .build-xcode/
+DerivedData/
+.swiftpm/
+
+# Xcode 个人设置（共享工程和 scheme 仍提交）
+xcuserdata/
+*.xcuserstate
 
 # .app 组装产物与发布包
 dist/
 *.dmg
+*.xcarchive/
+*.dSYM/
 
 # 配置备份
 *.bak
+
+# 本地环境与签名凭据
+.env
+.env.*
+!.env.example
+*.p12
+*.p8
+*.mobileprovision
+*.provisionprofile
+
+# Python 图标工具缓存
+__pycache__/
+*.py[cod]
 
 # 系统文件
 .DS_Store

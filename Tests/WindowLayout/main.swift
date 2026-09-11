@@ -45,6 +45,38 @@ try MainActor.assumeIsolated {
 
     // Regression: a full-width stack of buttons with required hugging capped the window at 668 pt.
     checkWidth(1000, "default width after layout")
+    @MainActor func descendants(_ view: NSView) -> [NSView] {
+        [view] + view.subviews.flatMap { descendants($0) }
+    }
+    let views = descendants(window.contentView!)
+    let ruleTable = views.compactMap { $0 as? NSTableView }.first { $0.headerView == nil && $0.rowHeight == 94 }!
+    ruleTable.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+    precondition(ruleTable.selectionHighlightStyle == .none, "Rule clicks must not produce selection highlighting")
+    let ruleRow = ruleTable.rowView(atRow: 0, makeIfNecessary: true)!
+    precondition(ruleRow.interiorBackgroundStyle == .normal, "Rule text must retain readable normal colors")
+    let buttons = views.compactMap { $0 as? SettingsButton }
+    precondition(!buttons.isEmpty)
+    for button in buttons {
+        let wasHidden = button.isHidden
+        button.isHidden = true
+        precondition(!button.isHovered, "Hidden controls cannot be hovered")
+        button.isHidden = wasHidden
+    }
+    window.orderOut(nil)
+    precondition(buttons.allSatisfy { !$0.isHovered }, "Closed windows cannot retain button hover")
+    controller.show()
+    print("PASS rule selection readability and hover visibility")
+    let secondHandler = model.addHandler(extension: "txt")!
+    controller.focus(handlerID: secondHandler.id)
+    precondition(ruleTable.numberOfRows == 0, "Menu navigation must show the target handler's rules")
+    let labels = descendants(window.contentView!).compactMap { $0 as? NSTextField }
+    precondition(labels.contains { $0.stringValue == "文本文件" && !$0.isHiddenOrHasHiddenAncestor },
+                 "Menu navigation must show the target handler's name")
+    controller.focus(handlerID: handler.id)
+    precondition(ruleTable.numberOfRows == 1, "Switching back must restore the original rules")
+    model.removeHandler(id: secondHandler.id)
+    controller.reloadFromModel()
+    print("PASS direct navigation to file type settings")
     for state in 0...2 {
         provider.current = state == 0 ? [:] : [UTType.jpeg.identifier: "test.openby"]
         if state == 2 { provider.current[UTType.png.identifier] = "test.openby" }

@@ -1,5 +1,12 @@
 # OpenBy 发布清单
 
+以下命令均在项目根目录执行。
+
+当前发布版本为 **1.1.0**，构建号 **3**。
+
+生成 DMG：`./scripts/build-dmg.sh`；通用版本：`./scripts/build-dmg.sh --universal`。
+脚本重新构建应用，生成包含 Applications 快捷方式和安装说明的压缩只读镜像，校验镜像并输出 SHA-256 文件；不会注册应用或修改默认打开方式。
+
 面向当前环境（macOS 26.5 Apple Silicon，仅 Command Line Tools + Swift 6.3.2，无完整 Xcode）的构建、验证与分发步骤。
 
 ## 1. 前置条件
@@ -22,7 +29,7 @@
 ## 3. 自动验证
 
 ```bash
-./scripts/run-tests.sh test     # 56 个单元测试（自定义 CLI 运行器，无 XCTest 依赖）
+./scripts/run-tests.sh test     # 单元测试（自定义 CLI 运行器，无 XCTest 依赖）
 ./scripts/run-tests.sh bench    # 10k 条规则路由基准
 ```
 

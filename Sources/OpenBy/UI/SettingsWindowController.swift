@@ -5,6 +5,16 @@ import UniformTypeIdentifiers
 /// Shared native presentation primitives. Colors follow the window's effective appearance.
 @MainActor
 enum SettingsStyle {
+    static let cornerRadius: CGFloat = 8
+
+    static func isMouseInside(_ view: NSView) -> Bool {
+        guard let window = view.window, window.isVisible, window.isKeyWindow,
+              window.attachedSheet == nil, !view.isHiddenOrHasHiddenAncestor,
+              !view.visibleRect.isEmpty else { return false }
+        let point = view.convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
+        return view.visibleRect.contains(point)
+    }
+
     static func label(_ text: String, size: CGFloat = 13, weight: NSFont.Weight = .regular, color: NSColor = .labelColor) -> NSTextField {
         let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: size, weight: weight)
@@ -80,6 +90,116 @@ enum SettingsStyle {
             content.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -inset),
         ])
         return box
+    }
+}
+
+/// Keep native button sizing, actions and keyboard behavior, with a shared modest radius.
+@MainActor
+final class SettingsButton: NSButton {
+    private var hoverTrackingArea: NSTrackingArea?
+    private var hoverRefreshPending = false
+    private var pointerInside = false {
+        didSet { if pointerInside != oldValue { needsDisplay = true } }
+    }
+    var isHovered: Bool {
+        pointerInside && window?.isKeyWindow == true && window?.isVisible == true
+            && window?.attachedSheet == nil && !isHiddenOrHasHiddenAncestor
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        cell = SettingsButtonCell(textCell: "")
+        isBordered = true
+        setButtonType(.momentaryPushIn)
+        bezelStyle = .rounded
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(refreshHover), name: name, object: nil)
+        }
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) 未实现") }
+    deinit { NotificationCenter.default.removeObserver(self) }
+    // NSCell may temporarily change the control's coordinate system while drawing.
+    // Resolve pointer geometry after layout, never from drawBezel/drawTitle.
+    @objc private func refreshHover() {
+        needsDisplay = true
+        guard !hoverRefreshPending else { return }
+        hoverRefreshPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.hoverRefreshPending = false
+            self.pointerInside = SettingsStyle.isMouseInside(self)
+        }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
+        let area = NSTrackingArea(rect: .zero,
+                                  options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverTrackingArea = area
+        refreshHover()
+    }
+
+    override func mouseEntered(with event: NSEvent) { refreshHover() }
+    override func mouseExited(with event: NSEvent) { pointerInside = false }
+    override func layout() { super.layout(); refreshHover() }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        pointerInside = false
+        refreshHover()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+}
+
+@MainActor
+private final class SettingsButtonCell: NSButtonCell {
+    override func drawBezel(withFrame frame: NSRect, in controlView: NSView) {
+        let outline = NSBezierPath(roundedRect: frame.insetBy(dx: 1, dy: 1),
+                                   xRadius: SettingsStyle.cornerRadius, yRadius: SettingsStyle.cornerRadius)
+        let bezelColor = (controlView as? NSButton)?.bezelColor
+        let emphasized = bezelColor != nil || keyEquivalent == "\r"
+        let color = emphasized ? (bezelColor ?? .controlAccentColor) : NSColor.controlColor
+        color.withAlphaComponent(isEnabled ? 1 : 0.3).setFill()
+        outline.fill()
+        if !emphasized {
+            NSColor.labelColor.withAlphaComponent(isEnabled ? 0.045 : 0.02).setFill()
+            outline.fill()
+        }
+        let hovered = (controlView as? SettingsButton)?.isHovered == true
+            && controlView.window?.isKeyWindow == true && isEnabled
+        if hovered && !isHighlighted {
+            (emphasized ? NSColor.white : NSColor.controlAccentColor)
+                .withAlphaComponent(emphasized ? 0.14 : 0.08).setFill()
+            outline.fill()
+            (emphasized ? NSColor.white : NSColor.controlAccentColor)
+                .withAlphaComponent(emphasized ? 0.28 : 0.3).setStroke()
+            outline.lineWidth = 1
+            outline.stroke()
+        }
+        if isHighlighted {
+            NSColor.labelColor.withAlphaComponent(0.12).setFill()
+            outline.fill()
+        }
+    }
+
+    override func drawTitle(_ title: NSAttributedString, withFrame frame: NSRect, in controlView: NSView) -> NSRect {
+        let styled = NSMutableAttributedString(attributedString: title)
+        let bezelColor = (controlView as? NSButton)?.bezelColor
+        let emphasized = bezelColor != nil || keyEquivalent == "\r"
+        let color: NSColor = !isEnabled ? .disabledControlTextColor : (emphasized ? .white : .labelColor)
+        styled.addAttribute(.foregroundColor, value: color, range: NSRange(location: 0, length: styled.length))
+        return super.drawTitle(styled, withFrame: frame, in: controlView)
+    }
+
+    override func drawFocusRingMask(withFrame frame: NSRect, in controlView: NSView) {
+        NSBezierPath(roundedRect: frame.insetBy(dx: 1, dy: 1),
+                     xRadius: SettingsStyle.cornerRadius, yRadius: SettingsStyle.cornerRadius).fill()
     }
 }
 
@@ -188,7 +308,7 @@ private final class SettingsTypeRow: NSTableRowView {
     override func draw(_ dirtyRect: NSRect) {
         let active = window?.isKeyWindow == true
         let accent = NSColor.controlAccentColor
-        let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 2.5, dy: 2.5), xRadius: 8, yRadius: 8)
+        let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 2.5, dy: 2.5), xRadius: SettingsStyle.cornerRadius, yRadius: SettingsStyle.cornerRadius)
         (isSelected ? accent : NSColor.labelColor).withAlphaComponent(backgroundAlpha).setFill()
         outline.fill()
         if isSelected {
@@ -249,17 +369,103 @@ private enum SettingsRuleAction: Int {
     case edit, toggle, delete
 }
 
+/// The handle leaves mouse events with the table so AppKit owns selection and reordering.
+@MainActor
+private final class SettingsRuleDragHandle: NSView {
+    private var tracking: NSTrackingArea?
+    private var hovered = false { didSet { needsDisplay = true } }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        toolTip = "拖动调整规则顺序"
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) 未实现") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .openHand)
+    }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: .zero,
+                                  options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        tracking = area
+        hovered = window.map { bounds.contains(convert($0.mouseLocationOutsideOfEventStream, from: nil)) } ?? false
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true }
+    override func mouseExited(with event: NSEvent) { hovered = false }
+    override func draw(_ dirtyRect: NSRect) {
+        (hovered ? NSColor.secondaryLabelColor : NSColor.tertiaryLabelColor).setFill()
+        for offset: CGFloat in [-5, 0, 5] {
+            NSBezierPath(roundedRect: NSRect(x: bounds.midX - 7, y: bounds.midY + offset - 1,
+                                            width: 14, height: 2), xRadius: 1, yRadius: 1).fill()
+        }
+    }
+}
+
+@MainActor
+private final class SettingsRuleRow: NSTableRowView {
+    private var tracking: NSTrackingArea?
+    override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(refreshHover), name: name, object: nil)
+        }
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) 未实现") }
+    deinit { NotificationCenter.default.removeObserver(self) }
+    @objc private func refreshHover() { needsDisplay = true }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: .zero,
+                                  options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        tracking = area
+        needsDisplay = true
+    }
+    override func mouseEntered(with event: NSEvent) { needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { needsDisplay = true }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    override func drawBackground(in dirtyRect: NSRect) {
+        let rect = bounds.insetBy(dx: 4, dy: 5)
+        let outline = NSBezierPath(roundedRect: rect, xRadius: SettingsStyle.cornerRadius, yRadius: SettingsStyle.cornerRadius)
+        NSColor.controlBackgroundColor.setFill()
+        outline.fill()
+        NSColor.labelColor.withAlphaComponent(0.025).setFill()
+        outline.fill()
+        if SettingsStyle.isMouseInside(self) {
+            NSColor.controlAccentColor.withAlphaComponent(0.08).setFill()
+            outline.fill()
+            NSColor.controlAccentColor.withAlphaComponent(0.35).setStroke()
+            outline.lineWidth = 1
+            outline.stroke()
+        }
+    }
+    override func drawSelection(in dirtyRect: NSRect) {}
+}
+
 @MainActor
 private final class SettingsRuleCell: NSTableCellView {
-    static let rowHeight: CGFloat = 84
-    let order = SettingsStyle.label("", size: 11, color: .secondaryLabelColor)
+    static let rowHeight: CGFloat = 94
+    let dragHandle = SettingsRuleDragHandle()
     let folder = SettingsStyle.label("", weight: .medium)
     let path = SettingsStyle.label("", size: 11, color: .secondaryLabelColor)
     let scope = SettingsStyle.label("", size: 11, color: .secondaryLabelColor)
     let appName = SettingsStyle.label("", size: 12, weight: .medium)
     let appIcon = NSImageView()
-    let edit = NSButton(title: "编辑…", target: nil, action: nil)
-    let more = NSButton(title: "⋮", target: nil, action: nil)
+    let edit = SettingsButton(title: "编辑", target: nil, action: nil)
+    let more = SettingsButton(title: "⋮", target: nil, action: nil)
     var ruleEnabled = true
     var ruleID: UUID?
     var onAction: ((UUID, SettingsRuleAction) -> Void)?
@@ -299,9 +505,7 @@ private final class SettingsRuleCell: NSTableCellView {
         path.lineBreakMode = .byTruncatingMiddle
         scope.lineBreakMode = .byTruncatingTail
         appName.lineBreakMode = .byTruncatingTail
-        order.widthAnchor.constraint(equalToConstant: 16).isActive = true
-        order.alignment = .center
-        order.toolTip = "拖动调整规则顺序"
+        SettingsStyle.size(dragHandle, 24)
         let location = SettingsStyle.column([SettingsStyle.row([folderIcon, folder], spacing: 6), path, scope], spacing: 3)
         location.setContentHuggingPriority(.init(1), for: .horizontal)
         location.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -319,21 +523,14 @@ private final class SettingsRuleCell: NSTableCellView {
         let arrow = SettingsStyle.label("→", color: .secondaryLabelColor)
         arrow.widthAnchor.constraint(equalToConstant: 14).isActive = true
         let actions = SettingsStyle.row([edit, more], spacing: 8)
-        let row = SettingsStyle.row([order, location, arrow, application, actions], spacing: 8)
+        let row = SettingsStyle.row([dragHandle, location, arrow, application, actions], spacing: 8)
         row.setCustomSpacing(16, after: application)
         row.translatesAutoresizingMaskIntoConstraints = false
         addSubview(row)
-        let separator = NSBox()
-        separator.boxType = .separator
-        separator.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(separator)
         NSLayoutConstraint.activate([
-            row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 22),
+            row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -22),
             row.centerYAnchor.constraint(equalTo: centerYAnchor),
-            separator.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            separator.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
-            separator.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) 未实现") }
@@ -384,11 +581,17 @@ final class SettingsWindowController: NSWindowController {
             didBuildContent = true
         }
         contentController.reload()
+        if window?.isMiniaturized == true { window?.deminiaturize(nil) }
         showWindow(nil)
     }
 
     func reloadFromModel() {
         contentController.reload()
+    }
+
+    func focus(handlerID: UUID) {
+        show()
+        contentController.focus(handlerID: handlerID)
     }
 }
 
@@ -404,7 +607,7 @@ private final class SettingsWorkspaceViewController: NSViewController,
     private let sidebarTitle = NSTextField(labelWithString: "文件类型")
     private let handlerTable = SettingsTypeTable()
     private let handlerScroll = NSScrollView()
-    private let addTypeButton = NSButton(title: "添加文件类型…", target: nil, action: nil)
+    private let addTypeButton = SettingsButton(title: "添加文件类型", target: nil, action: nil)
 
     private let detailContainer = DropTargetView()
     private let emptyView = NSView()
@@ -413,9 +616,8 @@ private final class SettingsWorkspaceViewController: NSViewController,
     private let typeIcon = NSImageView()
     private let typeSubtitle = NSTextField(labelWithString: "")
     private let fallbackIcon = NSImageView()
-    private let editTypeButton = NSButton(title: "编辑类型…", target: nil, action: nil)
-    private let stopButton = NSButton(title: "停用并恢复原应用", target: nil, action: nil)
-    private let removeTypeButton = NSButton(title: "移除类型…", target: nil, action: nil)
+    private let editTypeButton = SettingsButton(title: "编辑类型", target: nil, action: nil)
+    private let removeTypeButton = SettingsButton(title: "移除类型", target: nil, action: nil)
     private var ruleHeight: NSLayoutConstraint!
     private var editorSession: RuleEditorSession?
     private var associationBusy = false
@@ -426,19 +628,19 @@ private final class SettingsWorkspaceViewController: NSViewController,
     private let typeTitle = NSTextField(labelWithString: "")
     private let statusDot = NSTextField(labelWithString: "●")
     private let statusLabel = NSTextField(labelWithString: "")
-    private let enableButton = NSButton(title: "", target: nil, action: nil)
+    private let enableButton = SettingsButton(title: "", target: nil, action: nil)
 
     private let rulesTitle = NSTextField(labelWithString: "按文件所在位置选择应用")
     private let rulesExplanation = NSTextField(labelWithString: "如果一个文件同时符合多条规则，将优先使用排在上面的规则。")
     private let ruleTable = NSTableView()
     private let ruleScroll = NSScrollView()
     private let rulesEmptyLabel = NSTextField(labelWithString: "还没有文件夹规则。添加一条规则，让特定文件夹里的文件使用指定应用打开。")
-    private let addRuleButton = NSButton(title: "添加文件夹规则…", target: nil, action: nil)
+    private let addRuleButton = SettingsButton(title: "添加文件夹规则", target: nil, action: nil)
 
     private let fallbackTitle = NSTextField(labelWithString: "未匹配规则时")
     private let fallbackDescription = NSTextField(labelWithString: "没有匹配到上方规则时，使用：")
     private let fallbackApplication = NSTextField(labelWithString: "")
-    private let changeFallbackButton = NSButton(title: "更换应用…", target: nil, action: nil)
+    private let changeFallbackButton = SettingsButton(title: "更换应用", target: nil, action: nil)
 
     private let feedbackLabel = NSTextField(wrappingLabelWithString: "")
 
@@ -463,6 +665,17 @@ private final class SettingsWorkspaceViewController: NSViewController,
     override func viewDidLoad() {
         super.viewDidLoad()
         reload()
+    }
+
+    func focus(handlerID: UUID) {
+        guard model.handler(id: handlerID) != nil else { return }
+        selectedHandlerID = handlerID
+        reload()
+        if let index = model.configuration.handlers.firstIndex(where: { $0.id == handlerID }) {
+            handlerTable.scrollRowToVisible(index)
+        }
+        detailScroll.contentView.scroll(to: .zero)
+        detailScroll.reflectScrolledClipView(detailScroll.contentView)
     }
 
     func reload(message: String? = nil, isError: Bool = false) {
@@ -584,7 +797,7 @@ private final class SettingsWorkspaceViewController: NSViewController,
         steps.textColor = .secondaryLabelColor
         steps.maximumNumberOfLines = 3
 
-        let chooseButton = NSButton(title: "添加文件类型…", target: self, action: #selector(showAddFileType(_:)))
+        let chooseButton = SettingsButton(title: "添加文件类型", target: self, action: #selector(showAddFileType(_:)))
         chooseButton.bezelStyle = .rounded
         chooseButton.keyEquivalent = "\r"
 
@@ -653,7 +866,6 @@ private final class SettingsWorkspaceViewController: NSViewController,
         enableButton.target = self
         enableButton.action = #selector(toggleManaged(_:))
         for (button, action) in [(editTypeButton, #selector(editFormatGroup(_:))),
-                                 (stopButton, #selector(stopGroup(_:))),
                                  (removeTypeButton, #selector(removeFileType(_:)))] {
             SettingsStyle.button(button)
             button.target = self
@@ -661,7 +873,7 @@ private final class SettingsWorkspaceViewController: NSViewController,
         }
         let header = SettingsStyle.row([heading, SettingsStyle.spacer()])
         // Buttons resist stretching; the spacer lets this full-width row grow with the window.
-        let typeActions = SettingsStyle.row([editTypeButton, enableButton, stopButton, removeTypeButton, SettingsStyle.spacer()], spacing: 8)
+        let typeActions = SettingsStyle.row([editTypeButton, enableButton, removeTypeButton, SettingsStyle.spacer()], spacing: 8)
 
         rulesTitle.stringValue = "文件夹规则"
         rulesTitle.font = .systemFont(ofSize: 14, weight: .semibold)
@@ -691,6 +903,7 @@ private final class SettingsWorkspaceViewController: NSViewController,
         ruleTable.target = self
         ruleTable.doubleAction = #selector(editRule(_:))
         ruleTable.allowsMultipleSelection = false
+        ruleTable.selectionHighlightStyle = .none
         ruleTable.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
         ruleTable.setAccessibilityLabel("文件夹规则，按优先级排序")
         ruleTable.registerForDraggedTypes([Self.ruleDragType])
@@ -709,7 +922,7 @@ private final class SettingsWorkspaceViewController: NSViewController,
             rulesEmptyLabel.centerYAnchor.constraint(equalTo: ruleGroup.centerYAnchor),
             rulesEmptyLabel.widthAnchor.constraint(lessThanOrEqualTo: ruleGroup.widthAnchor, constant: -32),
         ])
-        addRuleButton.title = "添加规则…"
+        addRuleButton.title = "添加规则"
         SettingsStyle.button(addRuleButton, symbol: "plus")
         addRuleButton.target = self
         addRuleButton.action = #selector(addRule(_:))
@@ -768,19 +981,20 @@ private final class SettingsWorkspaceViewController: NSViewController,
         statusLabel.stringValue = health.text
 
         let managed = isManaged(handler)
-        enableButton.title = associationBusy ? "正在更新…" : (model.managedCount(handler) > 0 && !managed ? "启用剩余格式" : "启用自动打开")
-        enableButton.isEnabled = !associationBusy && !managed
-        enableButton.bezelColor = .controlAccentColor
+        let hasManagedFormats = model.managedCount(handler) > 0
+        enableButton.title = associationBusy ? "正在更新" : (hasManagedFormats ? "关闭自动打开" : "启用自动打开")
+        enableButton.isEnabled = !associationBusy
+        enableButton.bezelColor = hasManagedFormats ? nil : .controlAccentColor
         addRuleButton.bezelColor = managed ? .controlAccentColor : nil
         editTypeButton.isEnabled = !associationBusy
-        stopButton.isEnabled = !associationBusy && model.managedCount(handler) > 0
         removeTypeButton.isEnabled = !associationBusy
         addRuleButton.isEnabled = !associationBusy
         changeFallbackButton.isEnabled = !associationBusy
         handlerTable.isEnabled = !associationBusy
         addTypeButton.isEnabled = !associationBusy
-        enableButton.toolTip = "让 OpenBy 按当前配置打开这些文件"
-        stopButton.toolTip = "停用自动打开，并恢复启用前的默认应用"
+        enableButton.toolTip = hasManagedFormats
+            ? "关闭自动打开，并恢复启用前的默认应用"
+            : "让 OpenBy 按当前配置打开这些文件"
 
         fallbackApplication.stringValue = handler.fallbackApplication.bundleIdentifier.isEmpty
             ? "尚未设置"
@@ -858,7 +1072,7 @@ private final class SettingsWorkspaceViewController: NSViewController,
         alert.informativeText = "可添加多个后缀，共用同一套规则。选择预设后仍可修改，例如 jpg, png。"
         alert.addButton(withTitle: existing == nil ? "添加" : "保存")
         alert.addButton(withTitle: "取消")
-        alert.addButton(withTitle: "添加示例文件…")
+        alert.addButton(withTitle: "添加示例文件")
         alert.accessoryView = draft.view
         alert.window.initialFirstResponder = draft.extensionsField
 
@@ -974,7 +1188,8 @@ private final class SettingsWorkspaceViewController: NSViewController,
     }
 
     @objc private func toggleManaged(_ sender: Any?) {
-        updateManaged(enable: true)
+        guard let handler = currentHandler else { return }
+        updateManaged(enable: model.managedCount(handler) == 0)
     }
 
     private func updateManaged(enable: Bool) {
@@ -1020,10 +1235,6 @@ private final class SettingsWorkspaceViewController: NSViewController,
                 }
             }
         }
-    }
-
-    @objc private func stopGroup(_ sender: Any?) {
-        updateManaged(enable: false)
     }
 
     @objc private func removeFileType(_ sender: Any?) {
@@ -1176,13 +1387,7 @@ private final class SettingsWorkspaceViewController: NSViewController,
     }
 
     private func typeDisplayName(_ handler: FileHandler) -> String {
-        if let name = handler.groupName { return name }
-        switch handler.displayExtensions.first?.lowercased() {
-        case "pdf": return "PDF 文档"
-        case "md", "markdown": return "Markdown"
-        case "txt": return "文本文件"
-        default: return (handler.displayExtensions.first?.uppercased() ?? "未知类型") + " 文件"
-        }
+        SettingsModel.typeDisplayName(handler)
     }
 
     private func applicationIcon(_ reference: ApplicationReference) -> NSImage? {
@@ -1198,7 +1403,7 @@ private final class SettingsWorkspaceViewController: NSViewController,
     }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-        tableView === handlerTable ? SettingsTypeRow() : nil
+        tableView === handlerTable ? SettingsTypeRow() : SettingsRuleRow()
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
@@ -1219,7 +1424,6 @@ private final class SettingsWorkspaceViewController: NSViewController,
         let identifier = NSUserInterfaceItemIdentifier("ruleCell")
         let cell = tableView.makeView(withIdentifier: identifier, owner: nil) as? SettingsRuleCell ?? SettingsRuleCell()
         cell.identifier = identifier
-        cell.order.stringValue = String(row + 1)
         cell.folder.stringValue = folderDisplayName(rule.folderPath)
         let folderExists = FileManager.default.fileExists(atPath: PathInput.expandedAbsolutePath(rule.folderPath))
         let appExists = model.resolver.applicationURL(for: rule.targetApplication) != nil
@@ -1255,7 +1459,7 @@ private final class SettingsWorkspaceViewController: NSViewController,
     }
 
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
-        guard tableView === ruleTable,
+        guard tableView === ruleTable, !associationBusy,
               row >= 0,
               row < (currentHandler?.rules.count ?? 0) else { return nil }
         let item = NSPasteboardItem()
@@ -1366,7 +1570,7 @@ private final class RuleEditorSession: NSObject {
 
     private var sheet: NSWindow?
     private var completion: ((FolderRule?) -> Void)?
-    private let saveButton = NSButton(title: "保存规则", target: nil, action: nil)
+    private let saveButton = SettingsButton(title: "保存规则", target: nil, action: nil)
 
     func present(on parent: NSWindow, completion: @escaping (FolderRule?) -> Void) {
         self.completion = completion
@@ -1384,7 +1588,7 @@ private final class RuleEditorSession: NSObject {
         folderField.lineBreakMode = .byTruncatingMiddle
         folderField.setAccessibilityLabel("规则文件夹路径")
         folderField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let chooseFolder = NSButton(title: "选择文件夹…", target: self, action: #selector(chooseFolder(_:)))
+        let chooseFolder = SettingsButton(title: "选择文件夹", target: self, action: #selector(chooseFolder(_:)))
         SettingsStyle.button(chooseFolder, symbol: "folder")
         let folderRow = SettingsStyle.row([folderField, chooseFolder])
         descendantsButton.state = (existing?.includesDescendants ?? true) ? .on : .off
@@ -1393,14 +1597,14 @@ private final class RuleEditorSession: NSObject {
         applicationLabel.stringValue = targetApplication.bundleIdentifier.isEmpty ? "尚未选择应用" : targetApplication.displayName
         applicationLabel.lineBreakMode = .byTruncatingMiddle
         applicationLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let chooseApp = NSButton(title: "选择应用…", target: self, action: #selector(chooseApplication(_:)))
+        let chooseApp = SettingsButton(title: "选择应用", target: self, action: #selector(chooseApplication(_:)))
         SettingsStyle.button(chooseApp, symbol: "app")
         let appRow = SettingsStyle.row([applicationLabel, SettingsStyle.spacer(), chooseApp])
         enabledButton.state = (existing?.enabled ?? true) ? .on : .off
         previewLabel.font = .systemFont(ofSize: 12)
         previewLabel.maximumNumberOfLines = 0
         previewLabel.setContentCompressionResistancePriority(.required, for: .vertical)
-        let cancel = NSButton(title: "取消", target: self, action: #selector(cancelEditing(_:)))
+        let cancel = SettingsButton(title: "取消", target: self, action: #selector(cancelEditing(_:)))
         SettingsStyle.button(cancel)
         cancel.keyEquivalent = "\u{1b}"
         SettingsStyle.button(saveButton)

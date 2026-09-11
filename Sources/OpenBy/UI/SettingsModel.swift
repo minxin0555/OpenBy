@@ -5,6 +5,16 @@ import UniformTypeIdentifiers
 /// 每次变更落盘并通知协调器热更新。
 @MainActor
 final class SettingsModel {
+    static func typeDisplayName(_ handler: FileHandler) -> String {
+        if let name = handler.groupName { return name }
+        switch handler.displayExtensions.first?.lowercased() {
+        case "pdf": return "PDF 文档"
+        case "md", "markdown": return "Markdown"
+        case "txt": return "文本文件"
+        default: return (handler.displayExtensions.first?.uppercased() ?? "未知类型") + " 文件"
+        }
+    }
+
     let store: ConfigurationStore
     let resolver: ApplicationResolver
     let associationService: AssociationService
