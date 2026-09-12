@@ -1,5 +1,6 @@
 // swift-tools-version:6.0
 import PackageDescription
+import Foundation
 
 let package = Package(
     name: "OpenBy",
@@ -21,19 +22,21 @@ let package = Package(
             dependencies: ["OpenBy"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
-        // 无 Xcode/CLT 环境下 `swift test` 不可用（CLT SDK 不含 XCTest，Swift Testing
-        // framework 也不在可链接路径）。用轻量断言运行器替代，`swift run OpenByTestRunner`。
-        .executableTarget(
-            name: "OpenByTestRunner",
-            dependencies: ["OpenBy"],
-            path: "Sources/OpenByTestRunner",
-            swiftSettings: [.swiftLanguageMode(.v5)]
-        ),
-        .executableTarget(
-            name: "OpenByBenchmark",
-            dependencies: ["OpenBy"],
-            path: "Benchmarks/OpenByBenchmark",
-            swiftSettings: [.swiftLanguageMode(.v5)]
-        ),
     ]
 )
+
+// 本地保留测试源码时启用对应目标；公开源码无需这些目录即可构建。
+let packageDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+for (name, path) in [
+    ("OpenByTestRunner", "Sources/OpenByTestRunner"),
+    ("OpenByBenchmark", "Benchmarks/OpenByBenchmark"),
+] {
+    if FileManager.default.fileExists(atPath: packageDirectory.appendingPathComponent(path).path) {
+        package.targets.append(.executableTarget(
+            name: name,
+            dependencies: ["OpenBy"],
+            path: path,
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ))
+    }
+}

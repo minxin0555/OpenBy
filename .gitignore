@@ -48,3 +48,12 @@ __pycache__/
 
 # 系统文件
 .DS_Store
+
+# 本地测试、性能基准及其运行入口
+/Tests/
+/Benchmarks/
+/Sources/OpenByTestRunner/
+/scripts/run-tests.sh
+/scripts/check-window-layout.sh
+/OpenBy.xcodeproj/xcshareddata/xcschemes/OpenByTestRunner.xcscheme
+/OpenBy.xcodeproj/xcshareddata/xcschemes/OpenByBenchmark.xcscheme

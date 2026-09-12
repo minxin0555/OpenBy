@@ -1,5 +1,5 @@
 # OpenBy Xcode 工程定义（XcodeGen 生成 OpenBy.xcodeproj）。
-# 与 Package.swift 保持同构：OpenBy 静态框架 + 三个可执行 target。
+# 与 Package.swift 保持同构：OpenBy 静态框架 + 应用 target（测试仅在本地通过 SPM 运行）。
 # 语言模式 v5 对应 Package.swift 中的 .swiftLanguageMode(.v5)。
 # 重新生成: xcodegen generate
 
@@ -39,10 +39,9 @@ targets:
       - target: OpenBy
         # 静态框架只链接、不复制进 .app（复制会触发 "codeless framework" stub 注入导致签名失败）。
         embed: false
-    info:
-      path: Resources/Info.plist
     settings:
       base:
+        INFOPLIST_FILE: Resources/Info.plist
         PRODUCT_NAME: OpenBy
         # PRODUCT_MODULE_NAME 默认跟随 PRODUCT_NAME；不显式覆盖会让本 target 的
         # Swift 模块也叫 OpenBy，与 OpenBy 框架撞名，导致 `import OpenBy` 被忽略。
@@ -51,50 +50,10 @@ targets:
         # 无开发团队：ad-hoc 签名即可本地运行（与 scripts/build-app.sh 的 codesign -s - 一致）。
         CODE_SIGN_IDENTITY: "-"
 
-  # 无 XCTest 环境下的 CLI 测试运行器（swift run OpenByTestRunner 的 Xcode 版）。
-  OpenByTestRunner:
-    type: tool
-    platform: macOS
-    sources:
-      - path: Sources/OpenByTestRunner
-    dependencies:
-      - target: OpenBy
-        embed: false
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.OpenByTestRunner
-        CODE_SIGNING_ALLOWED: "NO"
-
-  # 路由基准（swift run OpenByBenchmark --rules 10000 的 Xcode 版）。
-  OpenByBenchmark:
-    type: tool
-    platform: macOS
-    sources:
-      - path: Benchmarks/OpenByBenchmark
-    dependencies:
-      - target: OpenBy
-        embed: false
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.OpenByBenchmark
-        CODE_SIGNING_ALLOWED: "NO"
-
 schemes:
   OpenByApp:
     build:
       targets:
         OpenByApp: all
-    run:
-      config: Debug
-  OpenByTestRunner:
-    build:
-      targets:
-        OpenByTestRunner: all
-    run:
-      config: Debug
-  OpenByBenchmark:
-    build:
-      targets:
-        OpenByBenchmark: all
     run:
       config: Debug
