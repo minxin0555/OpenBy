@@ -38,7 +38,7 @@ open dist/OpenBy.app
 
 输出为 `dist/OpenBy-<版本号>-<架构>.dmg` 和对应的 `.sha256` 校验文件。
 
-当前脚本使用 ad-hoc 签名，未进行 Developer ID 签名或公证。签名与分发步骤见[发布文档](docs/RELEASE.md)。
+当前脚本使用 ad-hoc 签名，未进行 Developer ID 签名或公证。
 
 也可以打开 `OpenBy.xcodeproj`，选择 `OpenByApp` scheme。工程定义维护在 `project.yml` 中，修改后通过 `xcodegen generate` 重新生成工程。
 
@@ -71,20 +71,13 @@ Sources/
 Tests/WindowLayout/     窗口布局回归检查
 Benchmarks/             性能基准
 Resources/              应用元数据与正式图标
-scripts/                构建、测试和图标生成脚本
-docs/                   发布步骤、技术设计与优化记录
-design/                 UI 概念稿、图标源文件与设计记录
+scripts/                构建与测试脚本
+dist/                   打包好的 DMG、ZIP 与校验文件
 OpenBy.xcodeproj/       可直接打开的共享 Xcode 工程
 Package.swift           Swift Package Manager 定义
 project.yml             XcodeGen 工程定义
 ```
 
-`.build/`、`.build-xcode/`、`dist/` 和 Xcode 个人配置已忽略；发布 ZIP 可作为 GitHub Release 附件上传。
+仓库保留项目源码、测试、构建脚本、正式资源和 `dist/` 中的 DMG、ZIP 及对应校验文件。README 作为项目使用说明保留。
 
-## 开发文档
-
-- [构建、验证与发布](docs/RELEASE.md)
-- [最初的技术设计](docs/开发文档.md)（历史方案，部分内容与当前实现不同）
-- [性能诊断与优化计划](docs/性能诊断与优化计划.md)
-- [UI 设计记录](design/UI美化方案.md)
-- [图标源文件与生成方法](design/icons/README.md)
+开发文档（`docs/`）、设计稿（`design/`）、本地图标生成脚本（`scripts/build-icons.sh`）、构建缓存、未压缩的 `.app` 和 Xcode 个人配置由 `.gitignore` 排除，仅留在本地。正式图标已包含在 `Resources/`，可直接构建应用。

@@ -10,9 +10,23 @@ DerivedData/
 xcuserdata/
 *.xcuserstate
 
-# .app 组装产物与发布包
-dist/
-*.dmg
+# 本地开发文档、设计稿与依赖设计稿的图标工具
+/docs/
+/design/
+/scripts/build-icons.sh
+AGENTS.md
+/.agents/
+/.codex/
+
+# dist 仅提交可分发的软件包与校验文件
+/dist/*
+!/dist/OpenBy-*.dmg
+!/dist/OpenBy-*.zip
+!/dist/OpenBy-*.dmg.sha256
+!/dist/OpenBy-*.zip.sha256
+
+# 未打包应用、调试符号与归档中间产物
+*.app/
 *.xcarchive/
 *.dSYM/
 
