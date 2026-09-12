@@ -1,9 +1,26 @@
-# OpenBy
+<h1 align="center">OpenBy</h1>
 
-OpenBy 是一款 macOS 文件打开方式管理工具，可以根据文件类型和所在文件夹，自动选择用于打开文件的应用。
+<p align="center">Open your files with the right app, based on where they live.</p>
 
-例如，同样是 PDF 文件，文献文件夹里的论文可以用 PDF Expert 打开，其他文件夹里的 PDF 则用系统“预览”打开。设置好规则后，在 Finder 中双击文件，就会交给对应的应用，无需每次手动选择“打开方式”。
+<p align="center"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a></p>
 
-你可以为不同文件类型设置默认应用，也可以为指定文件夹及其子文件夹单独指定应用。存在多条规则时，OpenBy 按顺序匹配；没有匹配的文件夹规则时，使用该文件类型的默认应用。
+---
 
-OpenBy 常驻菜单栏，支持登录时启动，关闭设置窗口后仍可处理文件打开请求。停用自动打开时，可恢复原有的打开方式。所有配置保存在本机，无网络请求或遥测。
+OpenBy is a native macOS utility that chooses which app opens a file based on its type and folder. Set your preferences once, then double-click files in Finder to open them with the app you chose.
+
+For example, PDFs in your research folder can open in PDF Expert, while PDFs elsewhere open in Preview.
+
+## Features
+
+- **Folder-based rules** — Choose an app for a specific folder, optionally including its subfolders.
+- **Defaults by file type** — Set a fallback app for files that do not match a folder rule.
+- **Ordered matching** — Arrange rules by priority; the first matching rule wins.
+- **Menu bar access** — Keep OpenBy running in the menu bar, with optional launch at login.
+- **Restore opening preferences** — Restore the previous app association when you disable automatic opening.
+- **Local and private** — Settings stay on your Mac, with no network requests or telemetry.
+
+## Download
+
+**[Download OpenBy 1.1.0 for macOS (.dmg)](dist/OpenBy-1.1.0-arm64.dmg?raw=true)**
+
+Requires macOS 14 or later · Apple Silicon (M series)
